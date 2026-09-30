@@ -1,0 +1,6 @@
+.DS_Store
+
+# Local AI-agent skill files, not part of the extension
+.agents/
+.aider-desk/
+skills-lock.json

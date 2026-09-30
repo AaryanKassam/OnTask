@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>OnTask</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="brand"><span class="mark"></span>OnTask</span>
+    <span id="status" class="pill"></span>
+  </header>
+
+  <main id="main"></main>
+
+  <p id="error" class="error" hidden></p>
+
+  <details id="settings">
+    <summary>Settings</summary>
+    <label class="field">
+      <span>Prompt me after this long off task</span>
+      <select id="dwell">
+        <option value="15">15 seconds (demo)</option>
+        <option value="30">30 seconds</option>
+        <option value="60">1 minute</option>
+        <option value="120">2 minutes</option>
+        <option value="300">5 minutes</option>
+        <option value="600">10 minutes</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Watch this long before guessing the task</span>
+      <select id="observe">
+        <option value="20">20 seconds</option>
+        <option value="60">1 minute</option>
+        <option value="180">3 minutes</option>
+        <option value="300">5 minutes</option>
+      </select>
+    </label>
+    <form id="key-form" class="field">
+      <span>Claude API key (optional)</span>
+      <div class="row">
+        <input id="api-key" type="password" placeholder="sk-ant-…" autocomplete="off">
+        <button class="secondary">Save</button>
+      </div>
+    </form>
+    <p id="engine" class="muted small"></p>
+  </details>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
