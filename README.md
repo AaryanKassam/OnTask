@@ -4,9 +4,7 @@ A Chrome extension that works out what you're working on from your tabs, checks 
 
 ## Demo
 
-<!-- Drag the demo video into this spot while editing the README on GitHub to embed it. -->
-
-_Demo video coming soon._
+https://github.com/user-attachments/assets/618e6271-4562-488e-b0cb-71208de9d23f
 
 ## What it does
 
