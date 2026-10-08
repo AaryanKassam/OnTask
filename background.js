@@ -7,9 +7,9 @@
 // All state lives in chrome.storage.session because the service worker can be
 // torn down between any two events.
 
-import { MODEL, classifyPage, inferTask, domainOf, cleanTitle, isNeutralUrl } from './classifier.js';
+import { classifyPage, inferTask, domainOf, cleanTitle, isNeutralUrl } from './classifier.js';
 
-const DEFAULTS = { apiKey: '', dwellSeconds: 120, observeSeconds: 60 };
+const DEFAULTS = { dwellSeconds: 120, observeSeconds: 60 };
 const PROMPTS_PER_HOUR = 6;
 const SNOOZE_MS = 5 * 60 * 1000;
 const OPEN_TAB_WEIGHT_MS = 1500; // tabs already open at start count a little
@@ -120,12 +120,10 @@ function freshState(now, settings) {
     taskSource: null,
     guess: null,
     guessTokens: [],
-    guessEngine: null,
     contextTokens: [],
     observeUntil: now + settings.observeSeconds * 1000,
     observations: {},
     observedMs: 0,
-    inferringSince: null,
     current: null,
     idle: false,
     blurred: false,
@@ -139,7 +137,6 @@ function freshState(now, settings) {
     snoozeUntil: 0,
     prompt: null,
     promptTimes: [],
-    lastError: null,
     stats: { onMs: 0, offMs: 0, ambiguousMs: 0, drifts: 0, driftDomains: {} },
   };
 }
@@ -236,35 +233,14 @@ async function evaluate() {
   if (s.mode === 'active' && ready) {
     const cached = s.cache[cacheKey(page)];
     if (s.allowList.includes(page.domain)) await applyVerdict(s, { verdict: 'on', reason: 'You said this site counts' });
-    else if (cached) await applyVerdict(s, cached);
-    else classifyLater(s, page);
+    else {
+      const result = cached ?? classifyPage({ task: s.task, contextTokens: s.contextTokens, domain: page.domain, title: page.title });
+      s.cache[cacheKey(page)] = result;
+      await applyVerdict(s, result);
+    }
   }
   // Neutral and still-loading pages leave any running drift clock alone.
   await saveState(s);
-}
-
-const inflight = new Set();
-
-// Classification can take seconds with Claude, so it runs outside the lock and
-// the result is applied only if the user is still on that page.
-function classifyLater(s, page) {
-  const key = cacheKey(page);
-  if (inflight.has(key)) return;
-  inflight.add(key);
-  const input = { task: s.task, contextTokens: s.contextTokens, allowList: s.allowList, domain: page.domain, title: page.title };
-  getSettings()
-    .then((settings) => classifyPage(input, settings.apiKey))
-    .then((result) =>
-      locked(async () => {
-        const s = await loadState();
-        if (s.mode !== 'active' || s.task !== input.task) return;
-        s.lastError = result.error ?? (result.engine === 'claude' ? null : s.lastError);
-        s.cache[key] = { verdict: result.verdict, reason: result.reason };
-        if (s.current && cacheKey(s.current) === key && !s.current.verdict) await applyVerdict(s, s.cache[key]);
-        await saveState(s);
-      }),
-    )
-    .finally(() => inflight.delete(key));
 }
 
 async function applyVerdict(s, { verdict, reason }) {
@@ -339,47 +315,25 @@ async function onDwell() {
 // --- inference --------------------------------------------------------------
 
 async function runInference(force) {
-  const job = await locked(async () => {
-    const s = await loadState();
-    const busy = s.inferringSince && Date.now() - s.inferringSince < 60_000;
-    if (s.mode !== 'observing' || busy) return null;
-    const now = Date.now();
-    accrue(s, now);
-    const observations = Object.values(s.observations);
-    if (!observations.length || (!force && s.observedMs < MIN_OBSERVED_MS)) {
-      // Not enough to go on yet (e.g. they've been on the new tab page).
-      s.observeUntil = now + 20_000;
-      await chrome.alarms.create('observe', { when: s.observeUntil });
-      await saveState(s);
-      return null;
-    }
-    s.inferringSince = now;
+  const s = await loadState();
+  if (s.mode !== 'observing') return;
+  const now = Date.now();
+  accrue(s, now);
+  const observations = Object.values(s.observations);
+  const result = observations.length && (force || s.observedMs >= MIN_OBSERVED_MS) ? inferTask(observations) : null;
+  if (!result) {
+    // Not enough to go on yet (e.g. they've been on the new tab page).
+    s.observeUntil = now + 20_000;
+    await chrome.alarms.create('observe', { when: s.observeUntil });
     await saveState(s);
-    return { observations, apiKey: (await getSettings()).apiKey };
-  });
-  if (!job) return;
-
-  const result = await inferTask(job.observations, job.apiKey).catch((err) => ({ error: String(err) }));
-
-  await locked(async () => {
-    const s = await loadState();
-    if (s.mode !== 'observing') return;
-    s.inferringSince = null;
-    if (result?.error) s.lastError = result.error;
-    if (!result?.task) {
-      s.observeUntil = Date.now() + 30_000;
-      await chrome.alarms.create('observe', { when: s.observeUntil });
-      await saveState(s);
-      return;
-    }
-    s.mode = 'confirming';
-    s.guess = result.task;
-    s.guessTokens = result.contextTokens ?? [];
-    s.guessEngine = result.engine;
-    s.prompt = newPrompt('confirm', { guess: result.task });
-    await showPrompt(s);
-    await saveState(s);
-  });
+    return;
+  }
+  s.mode = 'confirming';
+  s.guess = result.task;
+  s.guessTokens = result.contextTokens;
+  s.prompt = newPrompt('confirm', { guess: result.task });
+  await showPrompt(s);
+  await saveState(s);
 }
 
 // --- prompts ----------------------------------------------------------------
@@ -516,7 +470,7 @@ async function view() {
     state,
     lastSummary,
     now: Date.now(),
-    settings: { dwellSeconds: settings.dwellSeconds, observeSeconds: settings.observeSeconds, hasKey: !!settings.apiKey, model: MODEL },
+    settings: { dwellSeconds: settings.dwellSeconds, observeSeconds: settings.observeSeconds },
   };
 }
 
@@ -524,11 +478,6 @@ async function saveSettings(patch) {
   const { settings } = await chrome.storage.local.get('settings');
   await chrome.storage.local.set({ settings: { ...settings, ...patch } });
   const s = await loadState();
-  if (patch.apiKey !== undefined && s.mode === 'active') {
-    s.cache = {}; // new engine, fresh judgments
-    s.lastError = null;
-    await saveState(s);
-  }
   if (patch.dwellSeconds !== undefined && s.driftStart) await scheduleDwell(s);
 }
 
@@ -542,7 +491,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     start: () => locked(() => startSession(msg.task?.trim() || null)),
     stop: () => locked(() => stopSession()),
     'set-task': () => locked(() => setTask(msg.task.trim())),
-    'guess-now': () => runInference(true),
+    'guess-now': () => locked(() => runInference(true)),
     'save-settings': () => locked(() => saveSettings(msg.settings)),
   };
   const handler = handlers[msg?.type];
@@ -602,10 +551,19 @@ chrome.idle.onStateChanged.addListener((idleState) =>
 );
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'observe') runInference(false);
+  if (alarm.name === 'observe') locked(() => runInference(false));
   if (alarm.name === 'dwell') locked(onDwell);
 });
 
+// Earlier versions could store a Claude API key; don't keep one around.
+async function dropStoredApiKey() {
+  const { settings } = await chrome.storage.local.get('settings');
+  if (settings && 'apiKey' in settings) {
+    delete settings.apiKey;
+    await chrome.storage.local.set({ settings });
+  }
+}
+
 // On from the moment it's installed and every time the browser starts.
-chrome.runtime.onInstalled.addListener(() => locked(() => startSession(null)));
+chrome.runtime.onInstalled.addListener(() => locked(() => dropStoredApiKey().then(() => startSession(null))));
 chrome.runtime.onStartup.addListener(() => locked(() => startSession(null)));

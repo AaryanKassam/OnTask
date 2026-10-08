@@ -13,8 +13,6 @@
 
   <main id="main"></main>
 
-  <p id="error" class="error" hidden></p>
-
   <details id="settings">
     <summary>Settings</summary>
     <label class="field">
@@ -37,14 +35,7 @@
         <option value="300">5 minutes</option>
       </select>
     </label>
-    <form id="key-form" class="field">
-      <span>Claude API key (optional)</span>
-      <div class="row">
-        <input id="api-key" type="password" placeholder="sk-ant-…" autocomplete="off">
-        <button class="secondary">Save</button>
-      </div>
-    </form>
-    <p id="engine" class="muted small"></p>
+    <p class="muted small">Everything runs on this machine. OnTask reads each tab’s domain and title, and nothing is sent anywhere.</p>
   </details>
 
   <script src="popup.js" type="module"></script>

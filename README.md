@@ -30,6 +30,4 @@ It starts watching immediately, and again every time Chrome starts.
 
 ## Privacy
 
-It only reads each tab's domain and page title, never page content or screenshots.
-
-By default it judges tabs locally by matching keywords, and nothing leaves your machine. If you add a Claude API key in Settings, Claude makes the guesses and judgments instead, and only each tab's domain and title are sent.
+It only reads each tab's domain and page title, never page content or screenshots. Everything runs on your machine: tabs are judged by matching keywords in their titles, and nothing is sent anywhere.

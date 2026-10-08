@@ -94,7 +94,7 @@ function build(v) {
     };
     main.append(
       el('p', { className: 'lead', textContent: `Are you working on “${s.guess}”?` }),
-      el('p', { className: 'muted', textContent: s.guessEngine === 'claude' ? 'Guessed by Claude from your recent tabs.' : 'Guessed from the words in your recent tab titles.' }),
+      el('p', { className: 'muted', textContent: 'Guessed from the words in your recent tab titles.' }),
       el('div', { className: 'actions' }, [yes]),
       taskForm({ label: 'No, I’m working on', placeholder: 'e.g. CS 246 assignment', button: 'Set', type: 'set-task' }),
     );
@@ -179,14 +179,6 @@ function update(v) {
         : [el('li', { className: 'muted', textContent: 'Nowhere yet' })]),
     );
   }
-
-  const error = $('#error');
-  error.hidden = !s.lastError;
-  error.textContent = s.lastError || '';
-
-  $('#engine').textContent = v.settings.hasKey
-    ? `Using Claude (${v.settings.model}). Only each tab’s domain and title are sent. History and your allow-list stay on this machine.`
-    : 'Using local keyword matching. Nothing leaves this machine. Add a Claude API key for better guesses and judgments.';
 }
 
 async function refresh(force = false) {
@@ -205,17 +197,8 @@ async function initSettings() {
   const v = await send({ type: 'get-view' });
   $('#dwell').value = String(v.settings.dwellSeconds);
   $('#observe').value = String(v.settings.observeSeconds);
-  $('#api-key').placeholder = v.settings.hasKey ? 'Saved. Paste a new key to replace, or clear it' : 'sk-ant-…';
   $('#dwell').onchange = (e) => send({ type: 'save-settings', settings: { dwellSeconds: Number(e.target.value) } });
   $('#observe').onchange = (e) => send({ type: 'save-settings', settings: { observeSeconds: Number(e.target.value) } });
-  $('#key-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const apiKey = $('#api-key').value.trim();
-    await send({ type: 'save-settings', settings: { apiKey } });
-    $('#api-key').value = '';
-    $('#api-key').placeholder = apiKey ? 'Saved. Paste a new key to replace, or clear it' : 'sk-ant-…';
-    refresh(true);
-  });
 }
 
 initSettings();
