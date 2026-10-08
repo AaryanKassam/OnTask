@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "OnTask",
+    "slug": "ontask",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "LSApplicationQueriesSchemes": [
+          "instagram",
+          "youtube",
+          "snssdk1233"
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#f6f7f8"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-audio",
+      [
+        "expo-notifications",
+        {
+          "color": "#1f5c42"
+        }
+      ],
+      "expo-font",
+      "expo-asset"
+    ],
+    "scheme": "ontask",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
