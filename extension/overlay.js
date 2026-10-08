@@ -25,7 +25,7 @@
     .eyebrow { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600;
       letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-    .drift .dot { background: var(--warn); }
+    .drift .dot, .idle .dot { background: var(--warn); }
     .close { all: unset; cursor: pointer; color: var(--muted); font-size: 18px; line-height: 1;
       width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; }
     .close:hover { background: var(--hover); color: var(--fg); }
@@ -121,6 +121,33 @@
         input.focus();
       };
       ask();
+    } else if (p.kind === 'break') {
+      card.replaceChildren(
+        header('break-ok', 'Close'),
+        el('h2', { textContent: p.isLong ? `Long break · ${p.minutes} minutes` : `Break time · ${p.minutes} minutes` }),
+        el('p', { textContent: `Block ${p.blocksDone} done. Step away from the screen, ideally on your feet. I won’t flag anything until the break ends.` }),
+        el('div', { className: 'actions' }, [
+          button('Start break', 'primary', () => answer('break-ok')),
+          button('Skip break', 'secondary', () => answer('break-skip')),
+        ]),
+      );
+    } else if (p.kind === 'resume') {
+      card.replaceChildren(
+        header('resume-ok', 'Close'),
+        el('h2', { textContent: 'Break’s over' }),
+        el('p', { textContent: `Back to “${p.task}”.` }),
+        el('div', { className: 'actions' }, [button('Back to task', 'primary', () => answer('resume-back'))]),
+      );
+    } else if (p.kind === 'idle') {
+      card.replaceChildren(
+        header('idle-here', 'Close'),
+        el('h2', { textContent: 'Still with it?' }),
+        el('p', { textContent: `No typing or scrolling on ${p.domain} for ${p.idleMinutes} minutes.` }),
+        el('div', { className: 'actions' }, [
+          button('I’m here', 'primary', () => answer('idle-here')),
+          button('Taking a break', 'secondary', () => answer('idle-break'), 'No drift prompts for 10 minutes'),
+        ]),
+      );
     } else {
       const detail = `You’ve been away from “${p.task}” for ${since(p.driftStart)}. Right now you’re on ${p.domain}.`;
       card.replaceChildren(

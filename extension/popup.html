@@ -35,6 +35,29 @@
         <option value="300">5 minutes</option>
       </select>
     </label>
+    <label class="field">
+      <span>Focus timer</span>
+      <select id="timer">
+        <option value="off">Off</option>
+        <option value="pomodoro">Pomodoro · 25 min focus, 5 min break</option>
+        <option value="sprint">Short sprints · 15 / 3</option>
+        <option value="fiftyTwo">52 / 17</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Ask if I’m still there after this long idle</span>
+      <select id="idle">
+        <option value="0">Never</option>
+        <option value="2">2 minutes</option>
+        <option value="5">5 minutes</option>
+        <option value="10">10 minutes</option>
+        <option value="15">15 minutes</option>
+      </select>
+    </label>
+    <div class="field check-row">
+      <label><input id="sound" type="checkbox"> Play a sound with prompts</label>
+      <button id="test-sound" class="link" type="button">Test</button>
+    </div>
     <p class="muted small">Everything runs on this machine. OnTask reads each tab’s domain and title, and nothing is sent anywhere.</p>
   </details>
 

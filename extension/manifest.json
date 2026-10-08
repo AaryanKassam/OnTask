@@ -1,10 +1,19 @@
 {
   "manifest_version": 3,
   "name": "OnTask",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Works out what you're doing from your tabs, checks the guess with you, and nudges you when you've drifted off it.",
-  "permissions": ["tabs", "storage", "alarms", "scripting", "idle"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms",
+    "scripting",
+    "idle",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"

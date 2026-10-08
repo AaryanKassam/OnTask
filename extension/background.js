@@ -9,7 +9,9 @@
 
 import { classifyPage, inferTask, domainOf, cleanTitle, isNeutralUrl } from './classifier.js';
 
-const DEFAULTS = { dwellSeconds: 120, observeSeconds: 60 };
+const DEFAULTS = { dwellSeconds: 120, observeSeconds: 60, timer: 'off', idleMinutes: 5, sound: true };
+// Optional focus/break timer: [focus, break, long break, long break every N blocks] in minutes.
+const TIMERS = { pomodoro: [25, 5, 15, 4], sprint: [15, 3, 10, 4], fiftyTwo: [52, 17, 17, 0] };
 const PROMPTS_PER_HOUR = 6;
 const SNOOZE_MS = 5 * 60 * 1000;
 const OPEN_TAB_WEIGHT_MS = 1500; // tabs already open at start count a little
@@ -17,7 +19,11 @@ const MIN_OBSERVED_MS = 10_000;
 const MAX_OBSERVATIONS = 200;
 const HISTORY_LIMIT = 30;
 
-chrome.idle.setDetectionInterval(120);
+// Chrome reports "idle" after this long without keyboard or mouse input.
+function applyIdleInterval(settings) {
+  chrome.idle.setDetectionInterval(Math.max(60, (settings.idleMinutes || 2) * 60));
+}
+getSettings().then(applyIdleInterval);
 
 // --- storage ----------------------------------------------------------------
 
@@ -37,10 +43,31 @@ async function saveState(s) {
 }
 
 function updateBadge(s) {
-  const drifting = s.mode === 'active' && ['off', 'ambiguous'].includes(s.current?.verdict);
-  const text = s.mode === 'observing' || s.mode === 'confirming' ? '?' : drifting && s.current.verdict === 'off' ? 'off' : '';
+  const drifting = s.mode === 'active' && !inBreak(s) && s.current?.verdict === 'off';
+  let text = s.mode === 'observing' || s.mode === 'confirming' ? '?' : drifting ? 'off' : '';
+  let color = text === 'off' ? '#c2410c' : '#6b7280';
+  if (!text && s.mode === 'active' && s.timer) {
+    text = `${Math.max(0, Math.ceil((s.timer.endsAt - Date.now()) / 60_000))}m`;
+    color = inBreak(s) ? '#b45309' : '#1f5c42';
+  }
   chrome.action.setBadgeText({ text });
-  chrome.action.setBadgeBackgroundColor({ color: text === 'off' ? '#c2410c' : '#6b7280' });
+  chrome.action.setBadgeBackgroundColor({ color });
+}
+
+const inBreak = (s) => s.timer?.phase === 'break';
+
+// Service workers can't play audio, so chimes go through an offscreen page.
+async function playChime() {
+  if (!(await getSettings()).sound) return;
+  try {
+    const open = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+    if (!open.length) {
+      await chrome.offscreen.createDocument({ url: 'offscreen.html', reasons: ['AUDIO_PLAYBACK'], justification: 'Play OnTask alert chimes' });
+    }
+    await chrome.runtime.sendMessage({ target: 'offscreen', type: 'chime' });
+  } catch (err) {
+    console.warn('[OnTask] chime failed', err);
+  }
 }
 
 // Events arrive concurrently; every read-modify-write of state goes through here.
@@ -101,7 +128,8 @@ function accrue(s, now) {
     }
   } else if (s.mode === 'active') {
     const st = s.stats;
-    if (c.verdict === 'on') st.onMs += ms;
+    if (inBreak(s)) st.breakMs = (st.breakMs || 0) + ms; // breaks are neither on nor off task
+    else if (c.verdict === 'on') st.onMs += ms;
     else if (c.verdict === 'off' || c.verdict === 'ambiguous') {
       st[c.verdict === 'off' ? 'offMs' : 'ambiguousMs'] += ms;
       st.driftDomains[c.domain] = (st.driftDomains[c.domain] || 0) + ms;
@@ -137,7 +165,8 @@ function freshState(now, settings) {
     snoozeUntil: 0,
     prompt: null,
     promptTimes: [],
-    stats: { onMs: 0, offMs: 0, ambiguousMs: 0, drifts: 0, driftDomains: {} },
+    timer: null,
+    stats: { onMs: 0, offMs: 0, ambiguousMs: 0, breakMs: 0, drifts: 0, idles: 0, driftDomains: {} },
   };
 }
 
@@ -149,7 +178,7 @@ async function startSession(task) {
   const now = Date.now();
   const s = freshState(now, settings);
   if (task) {
-    activate(s, task, 'declared', []);
+    await activate(s, task, 'declared', []);
   } else {
     for (const tab of await chrome.tabs.query({})) {
       const p = pageOf(tab);
@@ -161,7 +190,7 @@ async function startSession(task) {
   await evaluate();
 }
 
-function activate(s, task, source, contextTokens) {
+async function activate(s, task, source, contextTokens) {
   Object.assign(s, {
     mode: 'active',
     task,
@@ -176,7 +205,62 @@ function activate(s, task, source, contextTokens) {
     lastDriftPromptAt: null,
     snoozeUntil: 0,
   });
-  chrome.alarms.clear('observe');
+  await chrome.alarms.clear('observe');
+  await startTimer(s, await getSettings());
+}
+
+// --- focus/break timer ------------------------------------------------------
+
+async function startTimer(s, settings) {
+  const spec = TIMERS[settings.timer];
+  if (!spec) {
+    s.timer = null;
+    await chrome.alarms.clear('timer');
+    await chrome.alarms.clear('badge');
+    return;
+  }
+  s.timer = { kind: settings.timer, phase: 'focus', endsAt: Date.now() + spec[0] * 60_000, blocksDone: 0, isLong: false };
+  await chrome.alarms.create('timer', { when: s.timer.endsAt });
+  await chrome.alarms.create('badge', { periodInMinutes: 1 });
+}
+
+// After a break, drift is measured from the moment focus resumes.
+async function resumeFocus(s, now) {
+  const [focusMin] = TIMERS[s.timer.kind];
+  s.timer = { ...s.timer, phase: 'focus', endsAt: now + focusMin * 60_000 };
+  await chrome.alarms.create('timer', { when: s.timer.endsAt });
+  if (s.current && ['off', 'ambiguous'].includes(s.current.verdict)) {
+    s.driftStart = now;
+    await scheduleDwell(s);
+  }
+}
+
+async function onTimer() {
+  const s = await loadState();
+  if (s.mode !== 'active' || !s.timer) return;
+  const now = Date.now();
+  if (now < s.timer.endsAt - 250) {
+    await chrome.alarms.create('timer', { when: s.timer.endsAt });
+    return;
+  }
+  accrue(s, now);
+  if (s.prompt) await hidePrompt(s);
+  if (s.timer.phase === 'focus') {
+    const [, breakMin, longMin, longEvery] = TIMERS[s.timer.kind];
+    const blocksDone = s.timer.blocksDone + 1;
+    const isLong = longEvery > 0 && blocksDone % longEvery === 0;
+    const minutes = isLong ? longMin : breakMin;
+    s.timer = { ...s.timer, phase: 'break', blocksDone, isLong, endsAt: now + minutes * 60_000 };
+    await chrome.alarms.create('timer', { when: s.timer.endsAt });
+    await resetDrift(s); // no drift prompts on a break
+    s.prompt = newPrompt('break', { minutes, blocksDone, isLong });
+  } else {
+    await resumeFocus(s, now);
+    s.prompt = newPrompt('resume', { task: s.task });
+  }
+  await showPrompt(s);
+  await saveState(s);
+  await playChime();
 }
 
 async function stopSession() {
@@ -195,6 +279,7 @@ async function stopSession() {
       offMs: s.stats.offMs,
       ambiguousMs: s.stats.ambiguousMs,
       drifts: s.stats.drifts,
+      idles: s.stats.idles || 0,
       driftDomains: topDomains(s.stats.driftDomains),
     };
     const { history = [] } = await chrome.storage.local.get('history');
@@ -250,7 +335,7 @@ async function applyVerdict(s, { verdict, reason }) {
   if (verdict === 'on') {
     s.lastOnTaskTabId = c.tabId;
     await resetDrift(s);
-  } else {
+  } else if (!inBreak(s)) {
     // The clock runs across consecutive off-task pages, so hopping from one
     // video to the next doesn't restart it. Only returning to the task does.
     s.driftStart ??= c.enteredAt;
@@ -284,7 +369,7 @@ async function scheduleDwell(s) {
 async function onDwell() {
   const s = await loadState();
   const c = s.current;
-  if (s.mode !== 'active' || !c || !s.driftStart || !['off', 'ambiguous'].includes(c.verdict)) return;
+  if (s.mode !== 'active' || inBreak(s) || !c || !s.driftStart || !['off', 'ambiguous'].includes(c.verdict)) return;
   const settings = await getSettings();
   const now = Date.now();
   const due = dwellDueAt(s, settings);
@@ -310,6 +395,7 @@ async function onDwell() {
   await showPrompt(s);
   await scheduleDwell(s);
   await saveState(s);
+  await playChime();
 }
 
 // --- inference --------------------------------------------------------------
@@ -334,6 +420,7 @@ async function runInference(force) {
   s.prompt = newPrompt('confirm', { guess: result.task });
   await showPrompt(s);
   await saveState(s);
+  await playChime();
 }
 
 // --- prompts ----------------------------------------------------------------
@@ -343,7 +430,8 @@ function newPrompt(kind, fields) {
 }
 
 function promptView(p) {
-  return { id: p.id, kind: p.kind, guess: p.guess, task: p.task, domain: p.domain, driftStart: p.driftStart };
+  const { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes } = p;
+  return { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes };
 }
 
 async function injectOverlay(tabId, view) {
@@ -402,10 +490,10 @@ async function answer({ promptId, action, value }) {
 
   switch (action) {
     case 'confirm-yes':
-      activate(s, s.guess, 'inferred', s.guessTokens);
+      await activate(s, s.guess, 'inferred', s.guessTokens);
       break;
     case 'confirm-correct':
-      activate(s, value.trim(), 'corrected', []);
+      await activate(s, value.trim(), 'corrected', []);
       break;
     case 'confirm-later':
       s.mode = 'observing';
@@ -414,6 +502,7 @@ async function answer({ promptId, action, value }) {
       s.observeUntil = now + settings.observeSeconds * 1000;
       await chrome.alarms.create('observe', { when: s.observeUntil });
       break;
+    case 'resume-back':
     case 'drift-back': {
       const tab = s.lastOnTaskTabId != null && (await chrome.tabs.get(s.lastOnTaskTabId).catch(() => null));
       if (tab) {
@@ -440,6 +529,18 @@ async function answer({ promptId, action, value }) {
       s.snoozeUntil = now + SNOOZE_MS;
       await scheduleDwell(s);
       break;
+    case 'break-skip':
+      if (inBreak(s)) {
+        accrue(s, now);
+        await resumeFocus(s, now);
+      }
+      break;
+    case 'idle-break':
+      // Stepping away on purpose: hold off on drift prompts for 10 minutes.
+      s.snoozeUntil = now + 10 * 60_000;
+      if (s.driftStart) await scheduleDwell(s);
+      break;
+    // 'break-ok', 'resume-ok' and 'idle-here' just close the card.
   }
   await saveState(s);
   if (s.mode === 'active' && !s.current) await evaluate();
@@ -450,7 +551,7 @@ async function setTask(task) {
   if (s.mode === 'off') return startSession(task);
   accrue(s, Date.now());
   if (s.prompt) await hidePrompt(s);
-  activate(s, task, 'declared', []);
+  await activate(s, task, 'declared', []);
   await saveState(s);
   await evaluate();
 }
@@ -470,15 +571,22 @@ async function view() {
     state,
     lastSummary,
     now: Date.now(),
-    settings: { dwellSeconds: settings.dwellSeconds, observeSeconds: settings.observeSeconds },
+    settings: { dwellSeconds: settings.dwellSeconds, observeSeconds: settings.observeSeconds, timer: settings.timer, idleMinutes: settings.idleMinutes, sound: settings.sound },
   };
 }
 
 async function saveSettings(patch) {
   const { settings } = await chrome.storage.local.get('settings');
   await chrome.storage.local.set({ settings: { ...settings, ...patch } });
+  const next = await getSettings();
+  if (patch.idleMinutes !== undefined) applyIdleInterval(next);
   const s = await loadState();
   if (patch.dwellSeconds !== undefined && s.driftStart) await scheduleDwell(s);
+  if (patch.timer !== undefined && s.mode === 'active') {
+    accrue(s, Date.now());
+    await startTimer(s, next);
+    await saveState(s);
+  }
 }
 
 // --- wiring -----------------------------------------------------------------
@@ -493,6 +601,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     'set-task': () => locked(() => setTask(msg.task.trim())),
     'guess-now': () => locked(() => runInference(true)),
     'save-settings': () => locked(() => saveSettings(msg.settings)),
+    'test-sound': () => playChime(),
   };
   const handler = handlers[msg?.type];
   if (!handler) return false;
@@ -540,19 +649,36 @@ chrome.windows.onRemoved.addListener((windowId) =>
   }),
 );
 
+// Idle on a page for too long: a chime and a "still with it?" card. A tab
+// playing audio (a lecture video) is someone listening, not someone idle, and
+// a locked screen is someone who walked away on purpose.
 chrome.idle.onStateChanged.addListener((idleState) =>
   locked(async () => {
     const s = await loadState();
     if (s.mode === 'off') return;
-    s.idle = idleState !== 'active';
+    const settings = await getSettings();
+    const tab = s.current && !s.current.neutral ? await chrome.tabs.get(s.current.tabId).catch(() => null) : null;
+    const listening = idleState === 'idle' && !!tab?.audible;
+    let chime = false;
+    if (idleState === 'idle' && !listening && s.mode === 'active' && settings.idleMinutes > 0 && !inBreak(s) && tab) {
+      if (s.prompt) await hidePrompt(s);
+      s.prompt = newPrompt('idle', { domain: s.current.domain, idleMinutes: settings.idleMinutes });
+      await showPrompt(s);
+      s.stats.idles = (s.stats.idles || 0) + 1;
+      chime = true;
+    }
+    s.idle = idleState !== 'active' && !listening;
     await saveState(s);
     await evaluate();
+    if (chime) await playChime();
   }),
 );
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'observe') locked(() => runInference(false));
   if (alarm.name === 'dwell') locked(onDwell);
+  if (alarm.name === 'timer') locked(onTimer);
+  if (alarm.name === 'badge') loadState().then(updateBadge);
 });
 
 // Earlier versions could store a Claude API key; don't keep one around.

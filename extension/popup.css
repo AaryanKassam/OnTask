@@ -107,5 +107,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .summary { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; margin-top: 4px; }
 .summary h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 
+.check-row { display: flex; align-items: center; justify-content: space-between; }
+.check-row label { display: flex; align-items: center; gap: 6px; }
+.check-row input { width: auto; }
+.timer-line { margin: -2px 0 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
 details { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
 summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 8px; }

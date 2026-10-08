@@ -111,6 +111,7 @@ function build(v) {
         el('span', { className: 'label', textContent: 'Working on' }),
         el('div', { className: 'task-line' }, [el('strong', { textContent: s.task }), change]),
       ]),
+      el('p', { className: 'timer-line', id: 'timer-line', hidden: true }),
     );
     if (editingTask) {
       main.append(taskForm({ label: 'New task', placeholder: s.task, button: 'Set', type: 'set-task' }));
@@ -148,8 +149,16 @@ function update(v) {
   let cls = '';
   if (s.mode === 'active') {
     const verdict = s.current?.verdict;
-    pill = s.current ? VERDICT_TEXT[verdict] ?? 'Checking…' : 'Away';
-    cls = verdict ?? '';
+    pill = s.timer?.phase === 'break' ? 'On a break' : s.current ? VERDICT_TEXT[verdict] ?? 'Checking…' : 'Away';
+    cls = s.timer?.phase === 'break' ? '' : verdict ?? '';
+    const line = $('#timer-line');
+    line.hidden = !s.timer;
+    if (s.timer) {
+      const left = fmt(Math.max(0, s.timer.endsAt - v.now));
+      line.textContent = s.timer.phase === 'break'
+        ? `${s.timer.isLong ? 'Long break' : 'Break'} · ${left} left`
+        : `Focus block ${s.timer.blocksDone + 1} · ${left} left`;
+    }
   }
   status.textContent = pill;
   status.className = `pill ${cls}`;
@@ -199,6 +208,13 @@ async function initSettings() {
   $('#observe').value = String(v.settings.observeSeconds);
   $('#dwell').onchange = (e) => send({ type: 'save-settings', settings: { dwellSeconds: Number(e.target.value) } });
   $('#observe').onchange = (e) => send({ type: 'save-settings', settings: { observeSeconds: Number(e.target.value) } });
+  $('#timer').value = v.settings.timer;
+  $('#idle').value = String(v.settings.idleMinutes);
+  $('#sound').checked = v.settings.sound;
+  $('#timer').onchange = (e) => send({ type: 'save-settings', settings: { timer: e.target.value } });
+  $('#idle').onchange = (e) => send({ type: 'save-settings', settings: { idleMinutes: Number(e.target.value) } });
+  $('#sound').onchange = (e) => send({ type: 'save-settings', settings: { sound: e.target.checked } });
+  $('#test-sound').onclick = () => send({ type: 'test-sound' });
 }
 
 initSettings();
