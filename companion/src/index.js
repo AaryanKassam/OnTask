@@ -13,7 +13,8 @@ import { homedir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createHub } from './hub.js';
-import { DEFAULT_MODEL, modelStatus } from './vision.js';
+import { screenshot } from './mac.js';
+import { DEFAULT_MODEL, inferTask, modelStatus } from './vision.js';
 import { createWatcher } from './watcher.js';
 
 const { values: args } = parseArgs({
@@ -75,23 +76,41 @@ OnTask companion is running.
   Phone          Settings → Connect to your computer → ${ip ?? '(no Wi-Fi address found)'} and ${code}
 `);
 
-if (args['no-screen']) {
+const status = await modelStatus(args.model);
+let watcher = null;
+if (status === 'no-ollama') {
+  hub.setWatcher('no-model', 'Ollama is not running');
+  console.log('Screen watching and task guessing are off: Ollama is not running. Install it from https://ollama.com and start it.\n');
+} else if (status === 'no-model') {
+  hub.setWatcher('no-model', `Run: ollama pull ${args.model}`);
+  console.log(`Screen watching and task guessing are off: the ${args.model} model isn't downloaded. Run:  ollama pull ${args.model}\n`);
+} else if (args['no-screen']) {
   hub.setWatcher('off', 'Started with --no-screen');
-  console.log('Screen watching is off (--no-screen).\n');
+  console.log(`Screen watching is off (--no-screen). Task guesses use ${args.model} on page titles only.\n`);
 } else {
-  const status = await modelStatus(args.model);
-  if (status === 'no-ollama') {
-    hub.setWatcher('no-model', 'Ollama is not running');
-    console.log('Screen watching is off: Ollama is not running. Install it from https://ollama.com and start it.\n');
-  } else if (status === 'no-model') {
-    hub.setWatcher('no-model', `Run: ollama pull ${args.model}`);
-    console.log(`Screen watching is off: the ${args.model} model isn't downloaded. Run:  ollama pull ${args.model}\n`);
-  } else {
-    console.log(`Screen watching: ${args.model}, checking every ${args.interval}s while a session runs.`);
-    console.log('Screenshots are judged on this Mac and deleted straight away.\n');
-    createWatcher({ hub, model: args.model, intervalSec: Number(args.interval), dwellSec: Number(args.dwell), log }).start();
-  }
+  console.log(`Screen watching: ${args.model}, checking every ${args.interval}s and on every tab change while a session runs.`);
+  console.log('Screenshots are judged on this Mac and deleted straight away.\n');
+  watcher = createWatcher({ hub, model: args.model, intervalSec: Number(args.interval), dwellSec: Number(args.dwell), log });
+  watcher.start();
 }
+
+// The extension switched tabs: look at the screen right away.
+hub.onRequest('check-now', () => watcher?.checkNow());
+
+// The extension's 20-second guess at the task, made with the local model
+// from recent page titles plus, when allowed, what's on screen right now.
+hub.onRequest('infer', async (_device, msg, reply) => {
+  const answer = (task) => reply({ type: 'infer-result', reqId: msg.reqId, task });
+  if (status !== 'ready') return answer(null);
+  const image = watcher ? await screenshot().catch(() => null) : null;
+  const pages = Array.isArray(msg.pages) ? msg.pages.slice(0, 50) : [];
+  const task = await inferTask({ model: args.model, pages, image }).catch((err) => {
+    log(`guess failed: ${err.message}`);
+    return null;
+  });
+  if (task) log(`guessed task: “${task}”`);
+  answer(task);
+});
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, async () => {

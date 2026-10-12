@@ -79,10 +79,9 @@ function build(v) {
       refresh(true);
     };
     main.append(
-      el('p', { className: 'lead', textContent: 'Watching your tabs' }),
+      taskForm({ label: 'What are you working on?', placeholder: 'e.g. CS 246 notes', button: 'Start', type: 'set-task' }),
       el('p', { className: 'muted', id: 'countdown' }),
       el('div', { className: 'actions' }, [guessNow, stopButton('Turn off')]),
-      taskForm({ label: 'Or just tell me', placeholder: 'e.g. CS 246 assignment', button: 'Set', type: 'set-task' }),
     );
   }
 
@@ -94,7 +93,7 @@ function build(v) {
     };
     main.append(
       el('p', { className: 'lead', textContent: `Are you working on “${s.guess}”?` }),
-      el('p', { className: 'muted', textContent: 'Guessed from the words in your recent tab titles.' }),
+      el('p', { className: 'muted', textContent: v.sync?.status === 'connected' ? 'Guessed by the model on this Mac from your screen and recent tabs.' : 'Guessed from the words in your recent tab titles.' }),
       el('div', { className: 'actions' }, [yes]),
       taskForm({ label: 'No, I’m working on', placeholder: 'e.g. CS 246 assignment', button: 'Set', type: 'set-task' }),
     );
@@ -114,6 +113,24 @@ function build(v) {
       el('p', { className: 'timer-line', id: 'timer-line', hidden: true }),
       el('p', { className: 'timer-line', id: 'linked-line', hidden: true }),
     );
+    if (s.timer?.flow && s.timer.phase === 'focus') {
+      const take = el('button', { className: 'primary full', textContent: 'Take a break' });
+      take.onclick = async () => {
+        await send({ type: 'take-break' });
+        refresh(true);
+      };
+      main.append(el('div', { className: 'actions' }, [take]));
+    }
+    if (s.timer?.phase === 'break') {
+      main.append(
+        el('span', { className: 'label', textContent: 'On your break' }),
+        el('div', { className: 'sites' }, [['TikTok', 'tiktok'], ['YouTube', 'youtube'], ['Instagram', 'instagram'], ['X', 'x']].map(([label, site]) => {
+          const b = el('button', { className: 'secondary', textContent: label });
+          b.onclick = () => send({ type: 'open-break-site', site });
+          return b;
+        })),
+      );
+    }
     if (editingTask) {
       main.append(taskForm({ label: 'New task', placeholder: s.task, button: 'Set', type: 'set-task' }));
       $('#task-input')?.focus();
@@ -155,10 +172,11 @@ function update(v) {
     const line = $('#timer-line');
     line.hidden = !s.timer;
     if (s.timer) {
-      const left = fmt(Math.max(0, s.timer.endsAt - v.now));
+      const open = s.timer.endsAt === null; // Flowtime focus
+      const t = fmt(open ? v.now - s.timer.phaseStartedAt : Math.max(0, s.timer.endsAt - v.now));
       line.textContent = s.timer.phase === 'break'
-        ? `${s.timer.isLong ? 'Long break' : 'Break'} · ${left} left`
-        : `Focus block ${s.timer.blocksDone + 1} · ${left} left`;
+        ? `${s.timer.isLong ? 'Long break' : 'Break'} · ${t} left`
+        : `Focus block ${s.timer.blocksDone + 1} · ${open ? `${t} so far` : `${t} left`}`;
     }
     const hub = v.sync?.status === 'connected' ? v.sync.hub : null;
     const linked = $('#linked-line');
@@ -174,7 +192,7 @@ function update(v) {
 
   if (s.mode === 'observing') {
     const left = Math.max(0, s.observeUntil - v.now);
-    $('#countdown').textContent = s.inferringSince ? 'Working out what you’re doing…' : `I’ll guess what you’re doing in ${fmt(left)}.`;
+    $('#countdown').textContent = s.inferringSince ? 'Working out what you’re doing…' : `No answer? I’ll guess in ${fmt(left)} and check with you.`;
   }
 
   if (s.mode === 'active') {
@@ -203,7 +221,7 @@ async function refresh(force = false) {
   view = await send({ type: 'get-view' });
   if (!view?.state) return;
   const s = view.state;
-  const key = [s.mode, s.task, s.guess, s.prompt?.id, editingTask].join('|');
+  const key = [s.mode, s.task, s.guess, s.prompt?.id, editingTask, s.timer?.kind, s.timer?.phase].join('|');
   if (force || key !== renderedKey) {
     renderedKey = key;
     build(view);
@@ -235,13 +253,21 @@ function updateCompanion(v) {
 async function initSettings() {
   const v = await send({ type: 'get-view' });
   $('#dwell').value = String(v.settings.dwellSeconds);
-  $('#observe').value = String(v.settings.observeSeconds);
   $('#dwell').onchange = (e) => send({ type: 'save-settings', settings: { dwellSeconds: Number(e.target.value) } });
-  $('#observe').onchange = (e) => send({ type: 'save-settings', settings: { observeSeconds: Number(e.target.value) } });
   $('#timer').value = v.settings.timer;
   $('#idle').value = String(v.settings.idleMinutes);
   $('#sound').checked = v.settings.sound;
-  $('#timer').onchange = (e) => send({ type: 'save-settings', settings: { timer: e.target.value } });
+  const showCustom = () => ($('#custom-times').hidden = $('#timer').value !== 'custom');
+  $('#custom-focus').value = String(v.settings.customFocusMin);
+  $('#custom-break').value = String(v.settings.customBreakMin);
+  showCustom();
+  $('#timer').onchange = (e) => {
+    showCustom();
+    send({ type: 'save-settings', settings: { timer: e.target.value } });
+  };
+  const minutes = (input, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(input.value) || lo)));
+  $('#custom-focus').onchange = (e) => send({ type: 'save-settings', settings: { customFocusMin: minutes(e.target, 5, 180) } });
+  $('#custom-break').onchange = (e) => send({ type: 'save-settings', settings: { customBreakMin: minutes(e.target, 1, 60) } });
   $('#idle').onchange = (e) => send({ type: 'save-settings', settings: { idleMinutes: Number(e.target.value) } });
   $('#sound').onchange = (e) => send({ type: 'save-settings', settings: { sound: e.target.checked } });
   $('#test-sound').onclick = () => send({ type: 'test-sound' });

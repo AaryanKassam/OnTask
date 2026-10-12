@@ -40,6 +40,11 @@
     .btn.secondary:hover { background: var(--hover); }
     .link { all: unset; cursor: pointer; margin-top: 12px; font-size: 12px; color: var(--muted); text-decoration: underline; }
     .link:hover { color: var(--fg); }
+    .sites { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0 12px; }
+    .site { all: unset; cursor: pointer; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--fg); }
+    .site:hover { background: var(--hover); }
+    .hint { margin: -4px 0 12px; font-size: 12px; }
     button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     input { box-sizing: border-box; width: 100%; margin: 0 0 12px; padding: 8px 10px; font: inherit; font-size: 14px;
       color: var(--fg); background: var(--field); border: 1px solid var(--line); border-radius: 8px; }
@@ -93,7 +98,25 @@
 
     const button = (text, cls, onclick, title) => el('button', { className: `btn ${cls}`, textContent: text, onclick, title: title || '' });
 
-    if (p.kind === 'confirm') {
+    if (p.kind === 'ask') {
+      const input = el('input', { placeholder: 'e.g. CS 246 notes', ariaLabel: 'What are you working on?' });
+      const submit = () => input.value.trim() && answer('ask-set', input.value.trim());
+      let told = false;
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') return submit();
+        if (!told) {
+          told = true; // hold off the guess while they type
+          chrome.runtime.sendMessage({ type: 'ask-typing' });
+        }
+      });
+      card.replaceChildren(
+        header('ask-later', 'Guess for me'),
+        el('h2', { textContent: 'What are you working on?' }),
+        input,
+        el('p', { className: 'hint', textContent: `Or just keep going. I’ll guess in ${p.seconds} seconds and check with you.` }),
+        el('div', { className: 'actions' }, [button('Start', 'primary', submit)]),
+      );
+    } else if (p.kind === 'confirm') {
       const ask = () => {
         card.replaceChildren(
           header('confirm-later', 'Ask me again later'),
@@ -125,7 +148,13 @@
       card.replaceChildren(
         header('break-ok', 'Close'),
         el('h2', { textContent: p.isLong ? `Long break · ${p.minutes} minutes` : `Break time · ${p.minutes} minutes` }),
-        el('p', { textContent: `Block ${p.blocksDone} done. Step away from the screen, ideally on your feet. I won’t flag anything until the break ends.` }),
+        el('p', { textContent: `Block ${p.blocksDone} done. I won’t flag anything until the break ends.` }),
+        el('div', { className: 'sites' }, [
+          ['TikTok', 'tiktok'],
+          ['YouTube', 'youtube'],
+          ['Instagram', 'instagram'],
+          ['X', 'x'],
+        ].map(([label, site]) => el('button', { className: 'site', textContent: label, onclick: () => answer('break-open', site) }))),
         el('div', { className: 'actions' }, [
           button('Start break', 'primary', () => answer('break-ok')),
           button('Skip break', 'secondary', () => answer('break-skip')),

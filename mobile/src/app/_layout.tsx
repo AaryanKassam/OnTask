@@ -4,24 +4,22 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { useTheme } from '@/components/ui';
-import { load, onAppStateChange, tick, useData } from '@/lib/store';
+import { load, onAppStateChange, useData } from '@/lib/store';
 
-// Runs the session clock and watches the app going to the background.
+// Connects to the computer and watches the app going to the background.
 function Engine() {
-  const { session, settings } = useData();
+  const { joinedId, remote, settings } = useData();
 
   useEffect(() => {
     load();
     const sub = AppState.addEventListener('change', onAppStateChange);
-    const id = setInterval(() => tick(), 1000);
-    return () => {
-      sub.remove();
-      clearInterval(id);
-    };
+    return () => sub.remove();
   }, []);
 
-  // Keep the screen on during focus so OnTask can sit on the desk as the timer.
-  const awake = !!session && settings.keepAwake && session.phase === 'focus';
+  // Keep the screen on while following a focus block, so the phone can sit
+  // on the desk as the timer.
+  const session = remote.hub?.session;
+  const awake = settings.keepAwake && !!session && session.id === joinedId && session.timer?.phase !== 'break';
   useEffect(() => {
     if (!awake) return;
     activateKeepAwakeAsync('focus').catch(() => {});
@@ -40,8 +38,8 @@ export default function RootLayout() {
       <Engine />
       <StatusBar style="auto" />
       <Stack screenOptions={{ contentStyle: { backgroundColor: t.bg }, headerStyle: { backgroundColor: t.card }, headerTintColor: t.fg }}>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="override" options={{ presentation: 'modal', title: 'Override' }} />
+        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="settings" options={{ presentation: 'modal', title: 'Settings' }} />
       </Stack>
     </>
   );

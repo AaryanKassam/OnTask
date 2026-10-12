@@ -53,6 +53,14 @@ export async function scheduleAt(id: string, at: number, title: string, body: st
   }).catch(() => {});
 }
 
+export async function notifyNow(title: string, body: string, sound = true): Promise<void> {
+  if (!native) return;
+  await Notifications.scheduleNotificationAsync({
+    content: { title, body, ...(sound ? { sound: 'default' } : {}) },
+    trigger: null,
+  }).catch(() => {});
+}
+
 export async function cancel(...ids: string[]): Promise<void> {
   if (!native) return;
   await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => {})));

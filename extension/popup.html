@@ -13,6 +13,25 @@
 
   <main id="main"></main>
 
+  <section class="timer-panel">
+    <label class="field">
+      <span>Timer</span>
+      <select id="timer">
+        <option value="off">Off</option>
+        <option value="pomodoro">Pomodoro · 25 min focus, 5 min break</option>
+        <option value="sprint">Short sprints · 15 / 3</option>
+        <option value="fiftyTwo">52 / 17</option>
+        <option value="deep">Deep work · 90 / 20</option>
+        <option value="flow">Flowtime · break when you stop</option>
+        <option value="custom">Custom</option>
+      </select>
+    </label>
+    <div id="custom-times" class="row" hidden>
+      <label class="field small-field"><span>Focus (min)</span><input id="custom-focus" type="number" min="5" max="180" step="5"></label>
+      <label class="field small-field"><span>Break (min)</span><input id="custom-break" type="number" min="1" max="60"></label>
+    </div>
+  </section>
+
   <details id="settings">
     <summary>Settings</summary>
     <label class="field">
@@ -24,24 +43,6 @@
         <option value="120">2 minutes</option>
         <option value="300">5 minutes</option>
         <option value="600">10 minutes</option>
-      </select>
-    </label>
-    <label class="field">
-      <span>Watch this long before guessing the task</span>
-      <select id="observe">
-        <option value="20">20 seconds</option>
-        <option value="60">1 minute</option>
-        <option value="180">3 minutes</option>
-        <option value="300">5 minutes</option>
-      </select>
-    </label>
-    <label class="field">
-      <span>Focus timer</span>
-      <select id="timer">
-        <option value="off">Off</option>
-        <option value="pomodoro">Pomodoro · 25 min focus, 5 min break</option>
-        <option value="sprint">Short sprints · 15 / 3</option>
-        <option value="fiftyTwo">52 / 17</option>
       </select>
     </label>
     <label class="field">
@@ -66,7 +67,7 @@
       </div>
       <span id="companion-status" class="muted small"></span>
     </form>
-    <p class="muted small">Everything runs on this machine. OnTask reads each tab’s domain and title, and nothing is sent anywhere.</p>
+    <p class="muted small">Everything runs on this machine. With the companion, screenshots are judged by a model on this Mac and deleted straight away. Nothing is sent to any online service.</p>
   </details>
 
   <script src="popup.js" type="module"></script>

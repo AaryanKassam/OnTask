@@ -2,8 +2,8 @@
 
 The companion is a small program that runs on your Mac. It does two things:
 
-- **Links your phone and the extension.** Start a session on either one and it starts on both; end it on either and it ends on both. Your computer sees when you pick up your phone.
-- **Watches your screen.** While a session is running, it checks which app is in front every 20 seconds. When that changes, it takes a screenshot, a vision model running on your Mac judges it against your task, and the screenshot is deleted straight away. If you stay off task in another app (Discord, a game, Messages) for 2 minutes, you get a notification. In Chrome, its judgment replaces the extension's guess from the tab title.
+- **Links your phone.** When Chrome starts a session, the phone app offers to follow along with the same task and timer. Your computer sees when you pick up your phone.
+- **Watches your screen.** While a session is running, it checks which app is in front every 20 seconds. When that changes, it takes a screenshot, a vision model running on your Mac judges it against your task, and the screenshot is deleted straight away. If you stay off task in another app (Discord, a game, Messages) for 2 minutes, you get a notification. In Chrome, each tab switch triggers a fresh check, and its judgment replaces the extension's guess from the tab title. It also makes the extension's 20-second guess at your task.
 
 Nothing leaves your Mac except the link to your phone over your own Wi-Fi.
 
@@ -38,7 +38,7 @@ Nothing leaves your Mac except the link to your phone over your own Wi-Fi.
 
 4. **Link the extension.** Click the OnTask icon in Chrome → **Settings** → **Companion app** → enter the pairing code → **Connect**. The line underneath should say *Connected*.
 
-5. **Link the phone.** In the OnTask app → **Settings** → **Connect to your computer** → enter the address and pairing code → **Connect**.
+5. **Link the phone.** In the OnTask app, tap the gear icon → **Your computer** → enter the address and pairing code → **Connect**. From then on, whenever Chrome starts a session, the phone asks **Connect?**
 
 ## Options
 

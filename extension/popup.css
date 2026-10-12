@@ -110,6 +110,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .check-row { display: flex; align-items: center; justify-content: space-between; }
 .check-row label { display: flex; align-items: center; gap: 6px; }
 .check-row input { width: auto; }
+.timer-panel { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
+.small-field { flex: 1; }
+.sites { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.sites button { flex: 1; }
 .timer-line { margin: -2px 0 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 details { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }

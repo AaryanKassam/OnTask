@@ -22,6 +22,7 @@ export function createWatcher({ hub, model, intervalSec = 20, dwellSec = 120, lo
   let lastPromptAt = null;
   let promptTimes = [];
   let sessionId = null;
+  let forceShot = false; // set by checkNow(): the page changed even if the title didn't
 
   function reset() {
     last = null;
@@ -56,7 +57,8 @@ export function createWatcher({ hub, model, intervalSec = 20, dwellSec = 120, lo
 
     const t = now();
     const key = `${front.app}|${front.title}`;
-    if (!last || last.key !== key || t - last.at >= RECHECK_MS) {
+    if (forceShot || !last || last.key !== key || t - last.at >= RECHECK_MS) {
+      forceShot = false;
       let image;
       try {
         image = await mac.screenshot();
@@ -90,15 +92,29 @@ export function createWatcher({ hub, model, intervalSec = 20, dwellSec = 120, lo
     }
   }
 
+  let busy = false;
+  let again = false;
+
   async function loop() {
     if (!running) return;
+    clearTimeout(timer);
+    if (busy) {
+      again = true; // a check is in flight; run another right after it
+      return;
+    }
+    busy = true;
     try {
       await check();
     } catch (err) {
       hub.setWatcher('error', String(err.message ?? err));
       log(`watcher error: ${err.message ?? err}`);
     }
-    if (running) timer = setTimeout(loop, intervalSec * 1000);
+    busy = false;
+    if (!running) return;
+    if (again) {
+      again = false;
+      timer = setTimeout(loop, 0);
+    } else timer = setTimeout(loop, intervalSec * 1000);
   }
 
   return {
@@ -109,6 +125,11 @@ export function createWatcher({ hub, model, intervalSec = 20, dwellSec = 120, lo
     stop() {
       running = false;
       clearTimeout(timer);
+    },
+    // The extension saw a tab change: look now instead of at the next tick.
+    checkNow() {
+      forceShot = true;
+      if (running) loop();
     },
     check, // exposed for tests
   };

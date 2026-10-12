@@ -1,13 +1,23 @@
 // Connection to the OnTask companion on your computer, over your Wi-Fi. The
-// companion links this app with the Chrome extension: a session started on
-// one shows up on the other, and phone pickups are visible on the computer.
+// computer is in charge: it sets the task and the timer, and this app follows
+// along and reports when the phone gets picked up.
 
 export interface HubState {
-  session: { id: string; task: string; startedAt: number; source: 'extension' | 'phone' } | null;
+  session: { id: string; task: string; startedAt: number; source: 'extension' | 'phone'; timer: HubTimer | null } | null;
   devices: { extension: boolean; phone: boolean };
   phone: { away: boolean; since: number | null; checks: number };
   screen: { app: string; title: string; verdict: 'on' | 'off' | 'ambiguous'; activity: string; reason: string; at: number } | null;
   watcher: { status: string; detail: string };
+}
+
+// The extension's focus timer. endsAt is null during a Flowtime focus block.
+export interface HubTimer {
+  kind: string;
+  phase: 'focus' | 'break';
+  endsAt: number | null;
+  phaseStartedAt: number | null;
+  blocksDone: number;
+  isLong: boolean;
 }
 
 export type SyncStatus = 'off' | 'connecting' | 'connected' | 'disconnected' | 'error';

@@ -8,6 +8,7 @@ const PING_MS = 20_000; // traffic on the socket keeps the service worker alive
 let ws = null;
 let handlers = null;
 let pingTimer = null;
+const pending = new Map(); // reqId -> resolve, for requests that expect a reply
 
 async function setStatus(status, detail = '', hubState) {
   const { sync } = await chrome.storage.session.get('sync');
@@ -52,6 +53,9 @@ export async function connect() {
     if (msg.type === 'welcome' || msg.type === 'state') {
       await setStatus('connected', '', msg.state);
       handlers?.onState(msg.state, msg.type === 'welcome');
+    } else if (msg.type === 'infer-result' && pending.has(msg.reqId)) {
+      pending.get(msg.reqId)(msg);
+      pending.delete(msg.reqId);
     } else if (msg.type === 'session-ended') {
       handlers?.onSessionEnded(msg);
     } else if (msg.type === 'error') {
@@ -82,4 +86,22 @@ export async function pair(code, port) {
 
 export function send(msg) {
   if (ws?.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+// Send a message and wait for its reply. Resolves to null when the companion
+// isn't connected or doesn't answer in time, so callers can fall back.
+export function request(msg, timeoutMs) {
+  if (ws?.readyState !== 1) return Promise.resolve(null);
+  const reqId = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pending.delete(reqId);
+      resolve(null);
+    }, timeoutMs);
+    pending.set(reqId, (reply) => {
+      clearTimeout(timer);
+      resolve(reply);
+    });
+    send({ ...msg, reqId });
+  });
 }

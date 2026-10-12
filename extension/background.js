@@ -1,6 +1,6 @@
 // The monitoring loop. Runs only on tab changes, never on a polling timer:
 //
-//   observing  → watch tabs for a minute, then guess the task
+//   observing  → ask what you're working on; if no answer in 20s, guess
 //   confirming → "Are you working on …?" is on screen, waiting for an answer
 //   active     → classify each tab against the task; sustained drift prompts
 //
@@ -8,11 +8,30 @@
 // torn down between any two events.
 
 import { classifyPage, inferTask, domainOf, cleanTitle, isNeutralUrl } from './classifier.js';
-import { initSync, connect as connectSync, getSync, pair, send as syncSend } from './sync.js';
+import { initSync, connect as connectSync, getSync, pair, request as syncRequest, send as syncSend } from './sync.js';
 
-const DEFAULTS = { dwellSeconds: 120, observeSeconds: 60, timer: 'off', idleMinutes: 5, sound: true };
-// Optional focus/break timer: [focus, break, long break, long break every N blocks] in minutes.
-const TIMERS = { pomodoro: [25, 5, 15, 4], sprint: [15, 3, 10, 4], fiftyTwo: [52, 17, 17, 0] };
+const DEFAULTS = { dwellSeconds: 120, timer: 'pomodoro', customFocusMin: 30, customBreakMin: 5, idleMinutes: 5, sound: true };
+const ASK_SECONDS = 20; // how long to wait for "what are you working on?" before guessing
+// Focus/break rhythms: focus, break, long break (minutes), long break every N blocks.
+// Flowtime has no fixed focus length; its break is a fifth of the focus.
+const TIMERS = {
+  pomodoro: { focusMin: 25, breakMin: 5, longMin: 15, longEvery: 4 },
+  sprint: { focusMin: 15, breakMin: 3, longMin: 10, longEvery: 4 },
+  fiftyTwo: { focusMin: 52, breakMin: 17, longMin: 17, longEvery: 0 },
+  deep: { focusMin: 90, breakMin: 20, longMin: 20, longEvery: 0 },
+  flow: { flow: true },
+};
+const BREAK_SITES = {
+  tiktok: 'https://www.tiktok.com/',
+  youtube: 'https://www.youtube.com/',
+  instagram: 'https://www.instagram.com/',
+  x: 'https://x.com/',
+};
+
+function timerSpec(kind, settings) {
+  if (kind === 'custom') return { focusMin: settings.customFocusMin, breakMin: settings.customBreakMin, longMin: settings.customBreakMin * 3, longEvery: 4 };
+  return TIMERS[kind] ?? null;
+}
 const PROMPTS_PER_HOUR = 6;
 const SNOOZE_MS = 5 * 60 * 1000;
 const OPEN_TAB_WEIGHT_MS = 1500; // tabs already open at start count a little
@@ -48,7 +67,8 @@ function updateBadge(s) {
   let text = s.mode === 'observing' || s.mode === 'confirming' ? '?' : drifting ? 'off' : '';
   let color = text === 'off' ? '#c2410c' : '#6b7280';
   if (!text && s.mode === 'active' && s.timer) {
-    text = `${Math.max(0, Math.ceil((s.timer.endsAt - Date.now()) / 60_000))}m`;
+    const mins = s.timer.endsAt === null ? Math.floor((Date.now() - s.timer.phaseStartedAt) / 60_000) : Math.ceil((s.timer.endsAt - Date.now()) / 60_000);
+    text = `${Math.max(0, mins)}m`;
     color = inBreak(s) ? '#b45309' : '#1f5c42';
   }
   chrome.action.setBadgeText({ text });
@@ -150,7 +170,7 @@ function freshState(now, settings) {
     guess: null,
     guessTokens: [],
     contextTokens: [],
-    observeUntil: now + settings.observeSeconds * 1000,
+    observeUntil: now + ASK_SECONDS * 1000,
     observations: {},
     observedMs: 0,
     current: null,
@@ -169,6 +189,7 @@ function freshState(now, settings) {
     timer: null,
     syncId: null, // shared session id when linked through the companion
     screenAt: 0,
+    screenWatching: false,
     stats: { onMs: 0, offMs: 0, ambiguousMs: 0, breakMs: 0, drifts: 0, idles: 0, driftDomains: {} },
   };
 }
@@ -188,6 +209,8 @@ async function startSession(task, remoteId = null) {
       if (!p.neutral && !p.ours && !p.placeholder) addObservation(s, p, OPEN_TAB_WEIGHT_MS);
     }
     await chrome.alarms.create('observe', { when: s.observeUntil });
+    // Ask first. The card follows them to the first page it can be shown on.
+    s.prompt = newPrompt('ask', { seconds: ASK_SECONDS });
   }
   await saveState(s);
   await evaluate();
@@ -213,59 +236,86 @@ async function activate(s, task, source, contextTokens, remoteId = null) {
   // Share the session with the phone, unless it came from there.
   s.syncId = remoteId ?? crypto.randomUUID();
   s.screenAt = 0;
-  if (!remoteId) syncSend({ type: 'session-start', session: { id: s.syncId, task, startedAt: s.activeSince } });
+  if (!remoteId) syncSend({ type: 'session-start', session: { id: s.syncId, task, startedAt: s.activeSince, timer: s.timer } });
+}
+
+// The phone mirrors the timer, so every change goes to the companion.
+function shareTimer(s) {
+  if (s.syncId) syncSend({ type: 'session-update', id: s.syncId, timer: s.timer });
 }
 
 // --- focus/break timer ------------------------------------------------------
 
 async function startTimer(s, settings) {
-  const spec = TIMERS[settings.timer];
+  const spec = timerSpec(settings.timer, settings);
   if (!spec) {
     s.timer = null;
     await chrome.alarms.clear('timer');
     await chrome.alarms.clear('badge');
     return;
   }
-  s.timer = { kind: settings.timer, phase: 'focus', endsAt: Date.now() + spec[0] * 60_000, blocksDone: 0, isLong: false };
-  await chrome.alarms.create('timer', { when: s.timer.endsAt });
+  const now = Date.now();
+  s.timer = { kind: settings.timer, ...spec, phase: 'focus', phaseStartedAt: now, endsAt: spec.flow ? null : now + spec.focusMin * 60_000, blocksDone: 0, isLong: false };
+  if (s.timer.endsAt) await chrome.alarms.create('timer', { when: s.timer.endsAt });
+  else await chrome.alarms.clear('timer');
   await chrome.alarms.create('badge', { periodInMinutes: 1 });
+}
+
+async function beginBreak(s, now) {
+  const t = s.timer;
+  const blocksDone = t.blocksDone + 1;
+  const isLong = !t.flow && t.longEvery > 0 && blocksDone % t.longEvery === 0;
+  const minutes = t.flow ? Math.min(20, Math.max(2, Math.round((now - t.phaseStartedAt) / 5 / 60_000))) : isLong ? t.longMin : t.breakMin;
+  s.timer = { ...t, phase: 'break', blocksDone, isLong, phaseStartedAt: now, endsAt: now + minutes * 60_000 };
+  await chrome.alarms.create('timer', { when: s.timer.endsAt });
+  await resetDrift(s); // no drift prompts on a break
+  if (s.prompt) await hidePrompt(s);
+  s.prompt = newPrompt('break', { minutes, blocksDone, isLong });
+  await showPrompt(s);
+  shareTimer(s);
 }
 
 // After a break, drift is measured from the moment focus resumes.
 async function resumeFocus(s, now) {
-  const [focusMin] = TIMERS[s.timer.kind];
-  s.timer = { ...s.timer, phase: 'focus', endsAt: now + focusMin * 60_000 };
-  await chrome.alarms.create('timer', { when: s.timer.endsAt });
+  const t = s.timer;
+  s.timer = { ...t, phase: 'focus', phaseStartedAt: now, endsAt: t.flow ? null : now + t.focusMin * 60_000 };
+  if (s.timer.endsAt) await chrome.alarms.create('timer', { when: s.timer.endsAt });
+  else await chrome.alarms.clear('timer');
   if (s.current && ['off', 'ambiguous'].includes(s.current.verdict)) {
     s.driftStart = now;
     await scheduleDwell(s);
   }
+  shareTimer(s);
 }
 
 async function onTimer() {
   const s = await loadState();
-  if (s.mode !== 'active' || !s.timer) return;
+  if (s.mode !== 'active' || !s.timer || s.timer.endsAt === null) return;
   const now = Date.now();
   if (now < s.timer.endsAt - 250) {
     await chrome.alarms.create('timer', { when: s.timer.endsAt });
     return;
   }
   accrue(s, now);
-  if (s.prompt) await hidePrompt(s);
   if (s.timer.phase === 'focus') {
-    const [, breakMin, longMin, longEvery] = TIMERS[s.timer.kind];
-    const blocksDone = s.timer.blocksDone + 1;
-    const isLong = longEvery > 0 && blocksDone % longEvery === 0;
-    const minutes = isLong ? longMin : breakMin;
-    s.timer = { ...s.timer, phase: 'break', blocksDone, isLong, endsAt: now + minutes * 60_000 };
-    await chrome.alarms.create('timer', { when: s.timer.endsAt });
-    await resetDrift(s); // no drift prompts on a break
-    s.prompt = newPrompt('break', { minutes, blocksDone, isLong });
+    await beginBreak(s, now);
   } else {
     await resumeFocus(s, now);
+    if (s.prompt) await hidePrompt(s);
     s.prompt = newPrompt('resume', { task: s.task });
+    await showPrompt(s);
   }
-  await showPrompt(s);
+  await saveState(s);
+  await playChime();
+}
+
+// Flowtime: you decide when the focus block ends.
+async function takeFlowBreak() {
+  const s = await loadState();
+  if (s.mode !== 'active' || !s.timer?.flow || s.timer.phase !== 'focus') return;
+  const now = Date.now();
+  accrue(s, now);
+  await beginBreak(s, now);
   await saveState(s);
   await playChime();
 }
@@ -319,17 +369,26 @@ async function evaluate() {
   if (!page) await resetDrift(s); // left the browser or went idle: we can't see them, so stop the clock
 
   const ready = page && !page.neutral && !page.placeholder;
-  if (s.mode === 'confirming' && ready && s.prompt && !s.prompt.windowId && !s.prompt.shownUrls.includes(page.tabId + page.url)) {
+  const following = s.prompt && (s.mode === 'confirming' || s.prompt.kind === 'ask');
+  if (following && ready && !s.prompt.windowId && !s.prompt.shownUrls.includes(page.tabId + page.url)) {
     await showPrompt(s); // they moved on without answering; follow them
   }
 
   if (s.mode === 'active' && ready) {
     const cached = s.cache[cacheKey(page)];
     if (s.allowList.includes(page.domain)) await applyVerdict(s, { verdict: 'on', reason: 'You said this site counts' });
+    else if (cached) await applyVerdict(s, cached);
     else {
-      const result = cached ?? classifyPage({ task: s.task, contextTokens: s.contextTokens, domain: page.domain, title: page.title });
-      s.cache[cacheKey(page)] = result;
-      await applyVerdict(s, result);
+      const guess = classifyPage({ task: s.task, contextTokens: s.contextTokens, domain: page.domain, title: page.title });
+      if (s.screenWatching) {
+        // The screen model has the final say. A title alone never marks a
+        // page off task while it's looking; it's "checking" until it answers.
+        syncSend({ type: 'check-now' });
+        await applyVerdict(s, guess.verdict === 'on' ? guess : { verdict: 'ambiguous', reason: 'Checking what’s on screen…' });
+      } else {
+        s.cache[cacheKey(page)] = guess;
+        await applyVerdict(s, guess);
+      }
     }
   }
   // Neutral and still-loading pages leave any running drift clock alone.
@@ -409,26 +468,58 @@ async function onDwell() {
 // --- inference --------------------------------------------------------------
 
 async function runInference(force) {
-  const s = await loadState();
-  if (s.mode !== 'observing') return;
-  const now = Date.now();
-  accrue(s, now);
-  const observations = Object.values(s.observations);
-  const result = observations.length && (force || s.observedMs >= MIN_OBSERVED_MS) ? inferTask(observations) : null;
-  if (!result) {
-    // Not enough to go on yet (e.g. they've been on the new tab page).
-    s.observeUntil = now + 20_000;
-    await chrome.alarms.create('observe', { when: s.observeUntil });
+  const job = await locked(async () => {
+    const s = await loadState();
+    if (s.mode !== 'observing' || (s.inferringSince && Date.now() - s.inferringSince < 30_000)) return null;
+    const now = Date.now();
+    if (s.askTyping && !force) {
+      // They're typing their answer; don't swap the card out from under them.
+      s.observeUntil = now + ASK_SECONDS * 1000;
+      s.askTyping = false;
+      await chrome.alarms.create('observe', { when: s.observeUntil });
+      await saveState(s);
+      return null;
+    }
+    accrue(s, now);
+    const observations = Object.values(s.observations);
+    if (!observations.length || (!force && s.observedMs < MIN_OBSERVED_MS)) {
+      // Not enough to go on yet (e.g. they've been on the new tab page).
+      s.observeUntil = now + 20_000;
+      await chrome.alarms.create('observe', { when: s.observeUntil });
+      await saveState(s);
+      return null;
+    }
+    s.inferringSince = now;
     await saveState(s);
-    return;
-  }
-  s.mode = 'confirming';
-  s.guess = result.task;
-  s.guessTokens = result.contextTokens;
-  s.prompt = newPrompt('confirm', { guess: result.task });
-  await showPrompt(s);
-  await saveState(s);
-  await playChime();
+    return observations;
+  });
+  if (!job) return;
+
+  // The local model on the companion guesses best (it can also see the
+  // screen); keyword matching is the fallback when it isn't running.
+  const local = inferTask(job);
+  const reply = await syncRequest({ type: 'infer', pages: job }, 25_000);
+  const task = reply?.task || local?.task || null;
+
+  await locked(async () => {
+    const s = await loadState();
+    if (s.mode !== 'observing') return;
+    s.inferringSince = null;
+    if (!task) {
+      s.observeUntil = Date.now() + 20_000;
+      await chrome.alarms.create('observe', { when: s.observeUntil });
+      await saveState(s);
+      return;
+    }
+    if (s.prompt) await hidePrompt(s);
+    s.mode = 'confirming';
+    s.guess = task;
+    s.guessTokens = local?.contextTokens ?? [];
+    s.prompt = newPrompt('confirm', { guess: task });
+    await showPrompt(s);
+    await saveState(s);
+    await playChime();
+  });
 }
 
 // --- prompts ----------------------------------------------------------------
@@ -438,8 +529,8 @@ function newPrompt(kind, fields) {
 }
 
 function promptView(p) {
-  const { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes } = p;
-  return { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes };
+  const { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes, seconds } = p;
+  return { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes, seconds };
 }
 
 async function injectOverlay(tabId, view) {
@@ -490,7 +581,7 @@ async function hidePrompt(s) {
 async function answer({ promptId, action, value }) {
   const s = await loadState();
   if (!s.prompt || s.prompt.id !== promptId) return;
-  if (action === 'confirm-correct' && !value?.trim()) return;
+  if ((action === 'confirm-correct' || action === 'ask-set') && !value?.trim()) return;
   const settings = await getSettings();
   const now = Date.now();
   const { domain } = s.prompt;
@@ -503,11 +594,18 @@ async function answer({ promptId, action, value }) {
     case 'confirm-correct':
       await activate(s, value.trim(), 'corrected', []);
       break;
+    case 'ask-set':
+      await activate(s, value.trim(), 'declared', []);
+      break;
+    // 'ask-later' just closes the card; the guess still comes after 20 seconds.
+    case 'break-open':
+      if (BREAK_SITES[value]) await chrome.tabs.create({ url: BREAK_SITES[value] });
+      break;
     case 'confirm-later':
       s.mode = 'observing';
       s.observations = {};
       s.observedMs = 0;
-      s.observeUntil = now + settings.observeSeconds * 1000;
+      s.observeUntil = now + ASK_SECONDS * 1000;
       await chrome.alarms.create('observe', { when: s.observeUntil });
       break;
     case 'resume-back':
@@ -581,7 +679,14 @@ async function view() {
     lastSummary,
     sync: { ...(await getSync()), paired: !!companion?.code },
     now: Date.now(),
-    settings: { dwellSeconds: settings.dwellSeconds, observeSeconds: settings.observeSeconds, timer: settings.timer, idleMinutes: settings.idleMinutes, sound: settings.sound },
+    settings: {
+      dwellSeconds: settings.dwellSeconds,
+      timer: settings.timer,
+      customFocusMin: settings.customFocusMin,
+      customBreakMin: settings.customBreakMin,
+      idleMinutes: settings.idleMinutes,
+      sound: settings.sound,
+    },
   };
 }
 
@@ -592,9 +697,11 @@ async function saveSettings(patch) {
   if (patch.idleMinutes !== undefined) applyIdleInterval(next);
   const s = await loadState();
   if (patch.dwellSeconds !== undefined && s.driftStart) await scheduleDwell(s);
-  if (patch.timer !== undefined && s.mode === 'active') {
+  const timerChanged = patch.timer !== undefined || patch.customFocusMin !== undefined || patch.customBreakMin !== undefined;
+  if (timerChanged && s.mode === 'active') {
     accrue(s, Date.now());
     await startTimer(s, next);
+    shareTimer(s);
     await saveState(s);
   }
 }
@@ -624,7 +731,14 @@ async function onHubState(hub, isWelcome) {
 
   // The companion restarted and lost the session: tell it again.
   if (isWelcome && !remote && s.mode === 'active' && s.syncId) {
-    syncSend({ type: 'session-start', session: { id: s.syncId, task: s.task, startedAt: s.activeSince } });
+    syncSend({ type: 'session-start', session: { id: s.syncId, task: s.task, startedAt: s.activeSince, timer: s.timer } });
+  }
+
+  const watching = s.mode === 'active' && remote?.id === s.syncId && ['watching', 'idle'].includes(hub.watcher.status);
+  if (watching !== !!s.screenWatching) {
+    s.screenWatching = watching;
+    await saveState(s);
+    if (watching) syncSend({ type: 'check-now' });
   }
 
   // What's actually on screen beats a guess from the tab title, except for
@@ -666,9 +780,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     start: () => locked(() => startSession(msg.task?.trim() || null)),
     stop: () => locked(() => stopSession()),
     'set-task': () => locked(() => setTask(msg.task.trim())),
-    'guess-now': () => locked(() => runInference(true)),
+    'guess-now': () => runInference(true),
     'save-settings': () => locked(() => saveSettings(msg.settings)),
     'test-sound': () => playChime(),
+    'take-break': () => locked(takeFlowBreak),
+    'ask-typing': () =>
+      locked(async () => {
+        const s = await loadState();
+        if (s.prompt?.kind !== 'ask' || s.askTyping) return;
+        s.askTyping = true;
+        await saveState(s);
+      }),
+    'open-break-site': () => (BREAK_SITES[msg.site] ? chrome.tabs.create({ url: BREAK_SITES[msg.site] }) : null),
     'pair-companion': () => pair(msg.code, msg.port),
   };
   const handler = handlers[msg?.type];
@@ -743,7 +866,7 @@ chrome.idle.onStateChanged.addListener((idleState) =>
 );
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'observe') locked(() => runInference(false));
+  if (alarm.name === 'observe') runInference(false);
   if (alarm.name === 'dwell') locked(onDwell);
   if (alarm.name === 'timer') locked(onTimer);
   if (alarm.name === 'sync') connectSync();

@@ -10,9 +10,10 @@
       "supportsTablet": false,
       "infoPlist": {
         "LSApplicationQueriesSchemes": [
-          "instagram",
+          "snssdk1233",
           "youtube",
-          "snssdk1233"
+          "instagram",
+          "twitter"
         ]
       }
     },
