@@ -9,6 +9,7 @@ import * as alerts from './alerts.ts';
 import { fmtDur } from './format.ts';
 import { resolveMethod, type MethodId } from './methods.ts';
 import * as S from './session.ts';
+import * as sync from './sync.ts';
 
 export interface Settings {
   methodId: MethodId;
@@ -22,6 +23,8 @@ export interface Settings {
   vibration: boolean;
   keepAwake: boolean;
   overrideWaitSec: number;
+  companionHost: string;
+  companionCode: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -36,6 +39,8 @@ export const DEFAULT_SETTINGS: Settings = {
   vibration: true,
   keepAwake: true,
   overrideWaitSec: 20,
+  companionHost: '',
+  companionCode: '',
 };
 
 interface Data {
@@ -45,6 +50,7 @@ interface Data {
   history: S.SessionRecord[];
   lastSummary: S.SessionRecord | null;
   checkInOpenSince: number | null;
+  remote: { status: sync.SyncStatus; detail: string; hub: sync.HubState | null };
 }
 
 const KEYS = { settings: 'ontask.settings', session: 'ontask.session', history: 'ontask.history' } as const;
@@ -52,7 +58,15 @@ const LEAVE_IDS = ['leave-1', 'leave-2', 'leave-3'];
 const HISTORY_LIMIT = 300;
 const CHECK_IN_TIMEOUT_MS = 90_000;
 
-let data: Data = { loaded: false, settings: DEFAULT_SETTINGS, session: null, history: [], lastSummary: null, checkInOpenSince: null };
+let data: Data = {
+  loaded: false,
+  settings: DEFAULT_SETTINGS,
+  session: null,
+  history: [],
+  lastSummary: null,
+  checkInOpenSince: null,
+  remote: { status: 'off', detail: '', hub: null },
+};
 let appActive = AppState.currentState === 'active';
 const listeners = new Set<() => void>();
 
@@ -106,6 +120,39 @@ export async function load() {
   emit();
   await alerts.setupAlerts();
   if (data.session) onAppStateChange('active');
+  configureSync();
+}
+
+// --- link to the computer ---------------------------------------------------
+
+let lastHubSessionId: string | null = null;
+
+const syncHandlers: sync.SyncHandlers = {
+  onStatus(status, detail) {
+    commit({ remote: { status, detail, hub: status === 'connected' ? data.remote.hub : null } });
+  },
+  onState(hub, isWelcome) {
+    commit({ remote: { status: 'connected', detail: '', hub } });
+    const s = data.session;
+    const remote = hub.session;
+    // The computer switched tasks in a session we share: follow it.
+    if (s && remote && remote.source !== 'phone' && s.syncId === lastHubSessionId && remote.id !== s.syncId) {
+      setSession({ ...s, task: remote.task, syncId: remote.id });
+    }
+    // The companion restarted and lost our session: tell it again.
+    if (isWelcome && !remote && s?.syncId) {
+      sync.send({ type: 'session-start', session: { id: s.syncId, task: s.task, startedAt: s.startedAt } });
+    }
+    lastHubSessionId = remote?.id ?? null;
+  },
+  onSessionEnded({ id, by }) {
+    if (by !== 'phone' && data.session?.syncId === id) endSession(false, true);
+  },
+};
+
+function configureSync() {
+  const { companionHost: host, companionCode: code } = data.settings;
+  sync.configure(host && code ? { host, code } : null, syncHandlers);
 }
 
 // --- side effects -----------------------------------------------------------
@@ -189,10 +236,13 @@ export function onAppStateChange(status: AppStateStatus) {
     if (next !== s) {
       setSession(next);
       scheduleLeaveReminders(next, now);
+      sync.send({ type: 'phone-away' });
     }
   } else if (status === 'active') {
     appActive = true;
     alerts.cancel(...LEAVE_IDS);
+    sync.connect(); // the socket may have been dropped while in the background
+    if (s?.away) sync.send({ type: 'phone-back' });
     if (!s) return;
     // Catch up on phases that ended while away (their notifications already
     // went off), then settle the time away against the grace period.
@@ -202,10 +252,13 @@ export function onAppStateChange(status: AppStateStatus) {
   // 'inactive' (Control Centre, an incoming call banner) is ignored.
 }
 
-export function startSession(input: { task: string; firstStep: string; ifThen: string; methodId: MethodId; lockMin: number }) {
+export function startSession(input: { task: string; firstStep: string; ifThen: string; methodId: MethodId; lockMin: number; syncId?: string }) {
   const st = data.settings;
   const method = resolveMethod(input.methodId, { focusMin: st.customFocusMin, breakMin: st.customBreakMin });
-  const session = S.createSession({ ...input, method, checkInEveryMin: st.checkInEveryMin }, Date.now());
+  const created = S.createSession({ ...input, method, checkInEveryMin: st.checkInEveryMin }, Date.now());
+  // Joining the computer's session keeps its id; otherwise announce a new one.
+  const session = { ...created, syncId: input.syncId ?? created.id };
+  if (!input.syncId) sync.send({ type: 'session-start', session: { id: session.syncId, task: session.task, startedAt: session.startedAt } });
   commit({ settings: { ...st, methodId: input.methodId, lockMin: input.lockMin }, lastSummary: null, checkInOpenSince: null });
   setSession(session);
   alerts.ensureNotificationPermission();
@@ -222,7 +275,10 @@ export const takeFlowBreak = () => update(S.takeFlowBreak);
 export const parkThought = (text: string) => update((s, now) => S.parkThought(s, text, now));
 export const toggleThought = (i: number) => update((s) => S.toggleThought(s, i));
 export const setResumeNote = (text: string) => update((s) => ({ ...s, resumeNote: text }));
-export const answerLeave = (onPhone: boolean) => update((s) => S.answerLeave(s, onPhone));
+export function answerLeave(onPhone: boolean) {
+  if (onPhone && data.session?.pendingLeave) sync.send({ type: 'phone-check' });
+  update((s) => S.answerLeave(s, onPhone));
+}
 
 export function answerCheckIn(onTask: boolean) {
   commit({ checkInOpenSince: null });
@@ -236,9 +292,10 @@ export function isLocked(now = Date.now()): boolean {
   return !!data.session && S.lockRemainingMs(data.session, now) > 0;
 }
 
-export function endSession(early: boolean) {
+export function endSession(early: boolean, fromRemote = false) {
   const s = data.session;
   if (!s) return;
+  if (s.syncId && !fromRemote) sync.send({ type: 'session-end', id: s.syncId });
   const record = S.toRecord(S.endSession(s, Date.now(), early));
   const history = record.focusMs >= S.MIN ? [record, ...data.history].slice(0, HISTORY_LIMIT) : data.history;
   commit({ history, lastSummary: record, checkInOpenSince: null });
@@ -250,6 +307,7 @@ export const dismissSummary = () => commit({ lastSummary: null });
 
 export function updateSettings(patch: Partial<Settings>) {
   commit({ settings: { ...data.settings, ...patch } });
+  if (patch.companionHost !== undefined || patch.companionCode !== undefined) configureSync();
   const s = data.session;
   if (s && patch.checkInEveryMin !== undefined) {
     setSession({ ...s, checkInEveryMin: patch.checkInEveryMin, nextCheckInAt: S.nextCheckIn(Date.now(), patch.checkInEveryMin) });

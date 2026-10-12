@@ -112,6 +112,7 @@ function build(v) {
         el('div', { className: 'task-line' }, [el('strong', { textContent: s.task }), change]),
       ]),
       el('p', { className: 'timer-line', id: 'timer-line', hidden: true }),
+      el('p', { className: 'timer-line', id: 'linked-line', hidden: true }),
     );
     if (editingTask) {
       main.append(taskForm({ label: 'New task', placeholder: s.task, button: 'Set', type: 'set-task' }));
@@ -159,7 +160,15 @@ function update(v) {
         ? `${s.timer.isLong ? 'Long break' : 'Break'} · ${left} left`
         : `Focus block ${s.timer.blocksDone + 1} · ${left} left`;
     }
+    const hub = v.sync?.status === 'connected' ? v.sync.hub : null;
+    const linked = $('#linked-line');
+    const parts = [];
+    if (hub?.devices.phone) parts.push(hub.phone.away ? 'Phone: picked up' : `Phone: ${hub.phone.checks} check${hub.phone.checks === 1 ? '' : 's'}`);
+    if (hub?.screen && hub.watcher.status === 'watching') parts.push(`Screen: ${hub.screen.activity}`);
+    linked.hidden = !parts.length;
+    linked.textContent = parts.join(' · ');
   }
+  updateCompanion(v);
   status.textContent = pill;
   status.className = `pill ${cls}`;
 
@@ -202,6 +211,27 @@ async function refresh(force = false) {
   update(view);
 }
 
+const WATCHER_TEXT = {
+  watching: 'watching the screen',
+  idle: 'screen watching ready',
+  'no-permission': 'screen watching needs permission',
+  'no-model': 'screen watching needs the model',
+  off: 'screen watching off',
+  error: 'screen watcher error',
+};
+
+function updateCompanion(v) {
+  const sync = v.sync ?? { status: 'off' };
+  let text = 'Not set up. Run the companion on this Mac to get a code.';
+  if (sync.status === 'connected' && sync.hub) {
+    const hub = sync.hub;
+    text = `Connected · ${hub.devices.phone ? 'phone linked' : 'phone not linked'} · ${WATCHER_TEXT[hub.watcher.status] ?? hub.watcher.status}`;
+    if (['no-permission', 'no-model', 'error'].includes(hub.watcher.status) && hub.watcher.detail) text += `: ${hub.watcher.detail}`;
+  } else if (sync.status === 'error') text = sync.detail || 'Wrong pairing code';
+  else if (sync.paired) text = 'Not connected. Is the companion running?';
+  $('#companion-status').textContent = text;
+}
+
 async function initSettings() {
   const v = await send({ type: 'get-view' });
   $('#dwell').value = String(v.settings.dwellSeconds);
@@ -215,6 +245,13 @@ async function initSettings() {
   $('#idle').onchange = (e) => send({ type: 'save-settings', settings: { idleMinutes: Number(e.target.value) } });
   $('#sound').onchange = (e) => send({ type: 'save-settings', settings: { sound: e.target.checked } });
   $('#test-sound').onclick = () => send({ type: 'test-sound' });
+  $('#companion-code').placeholder = v.sync?.paired ? 'Paired. Enter a new code to change' : 'Pairing code';
+  $('#companion-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await send({ type: 'pair-companion', code: $('#companion-code').value });
+    $('#companion-code').value = '';
+    setTimeout(() => refresh(true), 400);
+  });
 }
 
 initSettings();

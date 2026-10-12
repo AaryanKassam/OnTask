@@ -53,7 +53,8 @@ export default function FocusScreen() {
 // --- before a session -------------------------------------------------------
 
 function Setup() {
-  const { settings, lastSummary } = store.useData();
+  const { settings, lastSummary, remote } = store.useData();
+  const remoteSession = remote.hub?.session;
   const [task, setTask] = useState('');
   const [firstStep, setFirstStep] = useState('');
   const [ifThen, setIfThen] = useState('');
@@ -64,6 +65,16 @@ function Setup() {
   return (
     <Screen>
       <Title sub="Pick one thing. OnTask keeps time and notices when you drift.">OnTask</Title>
+      {remoteSession ? (
+        <Card tone="accent">
+          <Label>Your computer is working on</Label>
+          <Body style={{ fontWeight: '600' }}>{remoteSession.task}</Body>
+          <Button
+            title="Start here too"
+            onPress={() => store.startSession({ task: remoteSession.task, firstStep: '', ifThen: '', methodId: settings.methodId, lockMin: settings.lockMin, syncId: remoteSession.id })}
+          />
+        </Card>
+      ) : null}
       {lastSummary ? <SummaryCard record={lastSummary} /> : null}
 
       <Field label="What are you working on?" placeholder="e.g. CS 246 assignment 3" value={task} onChangeText={setTask} />
@@ -156,7 +167,9 @@ function SummaryCard({ record }: { record: S.SessionRecord }) {
 function SessionView({ s }: { s: S.Session }) {
   const t = useTheme();
   const now = useNow(500);
-  const { checkInOpenSince } = store.useData();
+  const { checkInOpenSince, remote } = store.useData();
+  const hub = remote.hub;
+  const screen = hub && hub.session?.id === s.syncId && hub.watcher.status === 'watching' ? hub.screen : null;
   const [confirmEnd, setConfirmEnd] = useState(false);
   const remaining = S.remainingMs(s, now);
   const length = S.phaseLengthMs(s);
@@ -196,6 +209,11 @@ function SessionView({ s }: { s: S.Session }) {
       {s.lockMin > 0 ? (
         <Body muted style={{ textAlign: 'center' }}>
           {lockLeft > 0 ? `Locked · ${fmtDur(lockLeft)} more focus unlocks ending and break apps` : 'Commitment met · everything is unlocked'}
+        </Body>
+      ) : null}
+      {screen ? (
+        <Body muted style={{ textAlign: 'center' }}>
+          Computer: {screen.activity} · {screen.verdict === 'on' ? 'on task' : screen.verdict === 'off' ? 'off task' : 'unclear'}
         </Body>
       ) : null}
       <Body muted style={{ textAlign: 'center' }}>

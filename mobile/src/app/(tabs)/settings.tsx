@@ -1,10 +1,56 @@
 import * as Linking from 'expo-linking';
 import { useState } from 'react';
 import { Pressable, Text } from 'react-native';
-import { Body, Button, Card, Choice, Label, Row, Screen, Title, Toggle, useTheme } from '@/components/ui';
+import { Body, Button, Card, Choice, Field, Label, Row, Screen, Title, Toggle, useTheme } from '@/components/ui';
 import { METHODS } from '@/lib/methods';
 import { RESEARCH } from '@/lib/research';
 import { clearHistory, updateSettings, useData } from '@/lib/store';
+
+const STATUS_TEXT: Record<string, string> = {
+  off: 'Not connected.',
+  connecting: 'Connecting…',
+  connected: 'Connected to your computer.',
+  disconnected: 'Can’t reach your computer. Is the companion running, and are you on the same Wi-Fi?',
+  error: 'Wrong pairing code.',
+};
+
+function ConnectCard() {
+  const { settings, remote } = useData();
+  const [host, setHost] = useState(settings.companionHost);
+  const [code, setCode] = useState(settings.companionCode);
+  const linked = !!settings.companionHost && !!settings.companionCode;
+  const hub = remote.hub;
+  return (
+    <Card>
+      <Label>Connect to your computer</Label>
+      <Body muted style={{ fontSize: 13 }}>
+        Run the OnTask companion on your Mac. It shows an address and a pairing code. Sessions then start and end on both devices, and your computer
+        sees when you pick up your phone.
+      </Body>
+      <Field label="Computer address" placeholder="e.g. 192.168.1.20" value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="numbers-and-punctuation" />
+      <Field label="Pairing code" placeholder="e.g. K7Q4MX" value={code} onChangeText={setCode} autoCapitalize="characters" autoCorrect={false} />
+      <Body muted style={{ fontSize: 13 }}>
+        {remote.status === 'error' ? remote.detail || STATUS_TEXT.error : STATUS_TEXT[remote.status]}
+        {hub ? ` Extension ${hub.devices.extension ? 'linked' : 'not linked'}. Screen watching ${hub.watcher.status === 'watching' || hub.watcher.status === 'idle' ? 'on' : 'off'}.` : ''}
+      </Body>
+      <Row>
+        <Button flex title={linked ? 'Reconnect' : 'Connect'} disabled={!host.trim() || !code.trim()} onPress={() => updateSettings({ companionHost: host.trim(), companionCode: code.trim() })} />
+        {linked ? (
+          <Button
+            flex
+            kind="secondary"
+            title="Disconnect"
+            onPress={() => {
+              setHost('');
+              setCode('');
+              updateSettings({ companionHost: '', companionCode: '' });
+            }}
+          />
+        ) : null}
+      </Row>
+    </Card>
+  );
+}
 
 export default function SettingsScreen() {
   const t = useTheme();
@@ -14,6 +60,8 @@ export default function SettingsScreen() {
   return (
     <Screen>
       <Title>Settings</Title>
+
+      <ConnectCard />
 
       <Card>
         <Choice label="Default study method" options={METHODS.map((m) => ({ label: m.name, value: m.id }))} value={st.methodId} onChange={(methodId) => updateSettings({ methodId })} />

@@ -37,3 +37,12 @@ Everything runs on your machine. It reads only each tab's domain and title, and 
 3. Scan the QR code with your phone's camera (iPhone) or the Expo Go app (Android).
 
 The lock is a soft lock for now: the app can't stop other apps from opening. Blocking apps at the system level needs a native build with Apple's Screen Time tools on iPhone and special permissions on Android.
+
+## Companion (Mac)
+
+An optional program that runs on your Mac and ties everything together:
+
+- **Links your phone and the extension** over your Wi-Fi. A session started on one starts on the other, ending it on either ends both, and your computer sees when you pick up your phone.
+- **Watches your screen** with a vision model running on your Mac through [Ollama](https://ollama.com). It judges what's actually on screen, not just tab titles, and covers apps outside the browser like Discord or games. Screenshots are deleted as soon as they've been judged, and nothing is sent anywhere.
+
+**Run it:** `ollama pull qwen3-vl:4b`, then `cd companion && npm install && npm start`. Full steps, permissions and options: [docs/SETUP.md](docs/SETUP.md).

@@ -8,6 +8,7 @@
 // torn down between any two events.
 
 import { classifyPage, inferTask, domainOf, cleanTitle, isNeutralUrl } from './classifier.js';
+import { initSync, connect as connectSync, getSync, pair, send as syncSend } from './sync.js';
 
 const DEFAULTS = { dwellSeconds: 120, observeSeconds: 60, timer: 'off', idleMinutes: 5, sound: true };
 // Optional focus/break timer: [focus, break, long break, long break every N blocks] in minutes.
@@ -166,11 +167,13 @@ function freshState(now, settings) {
     prompt: null,
     promptTimes: [],
     timer: null,
+    syncId: null, // shared session id when linked through the companion
+    screenAt: 0,
     stats: { onMs: 0, offMs: 0, ambiguousMs: 0, breakMs: 0, drifts: 0, idles: 0, driftDomains: {} },
   };
 }
 
-async function startSession(task) {
+async function startSession(task, remoteId = null) {
   const settings = await getSettings();
   const old = await loadState();
   if (old.prompt) await hidePrompt(old);
@@ -178,7 +181,7 @@ async function startSession(task) {
   const now = Date.now();
   const s = freshState(now, settings);
   if (task) {
-    await activate(s, task, 'declared', []);
+    await activate(s, task, remoteId ? 'remote' : 'declared', [], remoteId);
   } else {
     for (const tab of await chrome.tabs.query({})) {
       const p = pageOf(tab);
@@ -190,7 +193,7 @@ async function startSession(task) {
   await evaluate();
 }
 
-async function activate(s, task, source, contextTokens) {
+async function activate(s, task, source, contextTokens, remoteId = null) {
   Object.assign(s, {
     mode: 'active',
     task,
@@ -207,6 +210,10 @@ async function activate(s, task, source, contextTokens) {
   });
   await chrome.alarms.clear('observe');
   await startTimer(s, await getSettings());
+  // Share the session with the phone, unless it came from there.
+  s.syncId = remoteId ?? crypto.randomUUID();
+  s.screenAt = 0;
+  if (!remoteId) syncSend({ type: 'session-start', session: { id: s.syncId, task, startedAt: s.activeSince } });
 }
 
 // --- focus/break timer ------------------------------------------------------
@@ -263,9 +270,10 @@ async function onTimer() {
   await playChime();
 }
 
-async function stopSession() {
+async function stopSession(fromRemote = false) {
   const s = await loadState();
   if (s.mode === 'off') return;
+  if (s.syncId && !fromRemote) syncSend({ type: 'session-end', id: s.syncId });
   const now = Date.now();
   accrue(s, now);
   if (s.prompt) await hidePrompt(s);
@@ -567,9 +575,11 @@ async function view() {
     delete state.cache;
   }
   const { lastSummary = null } = await chrome.storage.local.get('lastSummary');
+  const { companion } = await chrome.storage.local.get('companion');
   return {
     state,
     lastSummary,
+    sync: { ...(await getSync()), paired: !!companion?.code },
     now: Date.now(),
     settings: { dwellSeconds: settings.dwellSeconds, observeSeconds: settings.observeSeconds, timer: settings.timer, idleMinutes: settings.idleMinutes, sound: settings.sound },
   };
@@ -589,6 +599,63 @@ async function saveSettings(patch) {
   }
 }
 
+// --- companion --------------------------------------------------------------
+
+const BROWSER_APPS = ['Google Chrome', 'Google Chrome Canary', 'Chromium', 'Brave Browser', 'Microsoft Edge', 'Arc'];
+const sameTitle = (a, b) => {
+  const x = (a || '').trim().toLowerCase();
+  const y = (b || '').trim().toLowerCase();
+  return !!x && !!y && (x.includes(y) || y.includes(x));
+};
+
+async function onHubState(hub, isWelcome) {
+  const s = await loadState();
+  const remote = hub.session;
+
+  // A session started on the phone: take on its task here too.
+  if (remote && remote.source !== 'extension' && remote.id !== s.syncId) {
+    if (s.mode === 'off') return startSession(remote.task, remote.id);
+    accrue(s, Date.now());
+    if (s.prompt) await hidePrompt(s);
+    await activate(s, remote.task, 'remote', [], remote.id);
+    await saveState(s);
+    return evaluate();
+  }
+
+  // The companion restarted and lost the session: tell it again.
+  if (isWelcome && !remote && s.mode === 'active' && s.syncId) {
+    syncSend({ type: 'session-start', session: { id: s.syncId, task: s.task, startedAt: s.activeSince } });
+  }
+
+  // What's actually on screen beats a guess from the tab title, except for
+  // sites the user has already said count.
+  const screen = hub.screen;
+  const c = s.current;
+  if (
+    s.mode === 'active' && remote?.id === s.syncId && screen && screen.at > (s.screenAt || 0) &&
+    c && !c.neutral && BROWSER_APPS.includes(screen.app) && sameTitle(screen.title, c.title) && !s.allowList.includes(c.domain)
+  ) {
+    s.screenAt = screen.at;
+    const result = { verdict: screen.verdict, reason: `On screen: ${screen.activity}` };
+    s.cache[cacheKey(c)] = result;
+    if (c.verdict !== screen.verdict || c.reason !== result.reason) {
+      accrue(s, Date.now());
+      await applyVerdict(s, result);
+    }
+    await saveState(s);
+  }
+}
+
+async function onSessionEnded({ id, by }) {
+  const s = await loadState();
+  if (by !== 'extension' && s.mode !== 'off' && s.syncId === id) await stopSession(true);
+}
+
+initSync({
+  onState: (hub, isWelcome) => locked(() => onHubState(hub, isWelcome)),
+  onSessionEnded: (msg) => locked(() => onSessionEnded(msg)),
+});
+
 // --- wiring -----------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -602,6 +669,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     'guess-now': () => locked(() => runInference(true)),
     'save-settings': () => locked(() => saveSettings(msg.settings)),
     'test-sound': () => playChime(),
+    'pair-companion': () => pair(msg.code, msg.port),
   };
   const handler = handlers[msg?.type];
   if (!handler) return false;
@@ -678,6 +746,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'observe') locked(() => runInference(false));
   if (alarm.name === 'dwell') locked(onDwell);
   if (alarm.name === 'timer') locked(onTimer);
+  if (alarm.name === 'sync') connectSync();
   if (alarm.name === 'badge') loadState().then(updateBadge);
 });
 

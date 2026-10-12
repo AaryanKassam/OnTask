@@ -41,6 +41,7 @@ export interface Session {
   nextCheckInAt: number | null;
   thoughts: { at: number; text: string; done: boolean }[];
   resumeNote: string;
+  syncId?: string; // shared session id when linked to the computer
 }
 
 // What gets kept in history once a session ends.
