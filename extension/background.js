@@ -673,11 +673,10 @@ async function view() {
     delete state.cache;
   }
   const { lastSummary = null } = await chrome.storage.local.get('lastSummary');
-  const { companion } = await chrome.storage.local.get('companion');
   return {
     state,
     lastSummary,
-    sync: { ...(await getSync()), paired: !!companion?.code },
+    sync: await getSync(),
     now: Date.now(),
     settings: {
       dwellSeconds: settings.dwellSeconds,
@@ -793,6 +792,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }),
     'open-break-site': () => (BREAK_SITES[msg.site] ? chrome.tabs.create({ url: BREAK_SITES[msg.site] }) : null),
     'pair-companion': () => pair(msg.code, msg.port),
+    'forget-phone': () => syncSend({ type: 'forget', phoneId: msg.phoneId }),
   };
   const handler = handlers[msg?.type];
   if (!handler) return false;

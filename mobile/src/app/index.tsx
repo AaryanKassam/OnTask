@@ -38,31 +38,31 @@ async function openApp(app: (typeof BREAK_APPS)[number]) {
 export default function Home() {
   const data = store.useData();
   if (!data.loaded) return <Screen>{null}</Screen>;
-  const { settings, remote, joinedId, declinedId, lastEnded } = data;
+  const { settings, remote, joinedId, declinedId, lastEnded, notice } = data;
   const session = remote.hub?.session ?? null;
-  const paired = !!settings.companionHost && !!settings.companionCode;
+  const computer = settings.computer;
 
   let body;
-  if (!paired) body = <NotPaired />;
-  else if (remote.status !== 'connected') body = <Disconnected status={remote.status} detail={remote.detail} />;
+  if (!computer) body = <NotPaired notice={notice} />;
+  else if (remote.status !== 'connected') body = <Looking name={computer.name} />;
   else if (session && session.id === joinedId) body = <Following hub={remote.hub!} />;
   else if (session && session.id !== declinedId) body = <Offer task={session.task} />;
   else body = <Waiting />;
 
   return (
     <Screen>
-      <Header />
+      <Header subtitle={computer && remote.status === 'connected' ? `Connected to ${computer.name}` : undefined} />
       {body}
       {lastEnded && !(session && session.id === joinedId) ? <Ended summary={lastEnded} /> : null}
     </Screen>
   );
 }
 
-function Header() {
+function Header({ subtitle }: { subtitle?: string }) {
   const t = useTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-      <Title>OnTask</Title>
+      <Title sub={subtitle}>OnTask</Title>
       <Pressable accessibilityRole="button" accessibilityLabel="Settings" onPress={() => router.push('/settings')} hitSlop={12} style={{ padding: 6 }}>
         <Ionicons name="settings-outline" size={24} color={t.muted} />
       </Pressable>
@@ -70,27 +70,22 @@ function Header() {
   );
 }
 
-function NotPaired() {
+function NotPaired({ notice }: { notice: string | null }) {
   return (
     <Card tone="accent">
-      <Label>Connect to your computer</Label>
-      <Body>OnTask on your phone follows the session you start in Chrome. Run the companion on your Mac, then enter the address and pairing code it shows.</Body>
-      <Button title="Connect" onPress={() => router.push('/settings')} />
+      <Label>Pair with your computer</Label>
+      {notice ? <Body>{notice}</Body> : null}
+      <Body>OnTask on your phone follows the session you start in Chrome. Pair once and they’ll find each other from then on.</Body>
+      <Button title="Pair" onPress={() => router.push('/pair')} />
     </Card>
   );
 }
 
-function Disconnected({ status, detail }: { status: string; detail: string }) {
-  const text =
-    status === 'error'
-      ? 'The pairing code was wrong. Check it in Settings.'
-      : status === 'connecting'
-        ? 'Connecting to your computer…'
-        : detail || 'Can’t reach your computer. Is the companion running, and are you on the same Wi-Fi?';
+function Looking({ name }: { name: string }) {
   return (
     <Card>
-      <Body>{text}</Body>
-      <Button kind="secondary" title="Settings" onPress={() => router.push('/settings')} />
+      <Label>Looking for {name}</Label>
+      <Body muted>Make sure Chrome is open on it and you’re on the same Wi-Fi. This connects on its own as soon as it can.</Body>
     </Card>
   );
 }

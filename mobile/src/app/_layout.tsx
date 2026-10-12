@@ -40,6 +40,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ contentStyle: { backgroundColor: t.bg }, headerStyle: { backgroundColor: t.card }, headerTintColor: t.fg }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ presentation: 'modal', title: 'Settings' }} />
+        <Stack.Screen name="pair" options={{ headerShown: false }} />
       </Stack>
     </>
   );

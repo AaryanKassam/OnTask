@@ -25,11 +25,11 @@ https://github.com/user-attachments/assets/be4bcde3-9a71-41a7-8cbc-2895da7ba170
 Runs on your Mac and makes the other two smarter:
 
 - **Watches your screen** with a vision model running on your Mac through [Ollama](https://ollama.com). It judges what's actually on screen instead of guessing from tab titles, so a CS course outline counts toward your CS notes. It also covers apps outside Chrome, like Discord or games. Screenshots are deleted as soon as they've been judged.
-- **Links your phone.** When Chrome starts a session, your phone offers to follow along.
+- **Links your phone.** Pair once by scanning a QR code; your phone shows up by name in Chrome. When Chrome starts a session, your phone offers to follow along.
 
 No online services or APIs: the only model is the one running on your Mac.
 
-**Run it:** `ollama pull qwen3-vl:4b`, then `cd companion && npm install && npm start`. Full steps: [docs/SETUP.md](docs/SETUP.md).
+**Set up once:** `ollama pull qwen3-vl:4b`, then `cd companion && npm install && npm run setup`. After that, Chrome starts the companion (plus Ollama and the phone app server) on its own. Full steps: [docs/SETUP.md](docs/SETUP.md).
 
 ## Phone app (iPhone and Android)
 
@@ -41,4 +41,4 @@ The computer is in charge, so the app is one screen:
 - Leaving the app mid-block sends a reminder, and your computer sees the pickup.
 - To truly lock your phone to OnTask, use **Guided Access** (iPhone) or **app pinning** (Android). The app walks you through it.
 
-**Run it:** install **Expo Go** on your phone, then `cd mobile && npm install && npx expo start` and scan the QR code. Connect it to the companion in the app's settings.
+**Pair it once:** install **Expo Go**, run `npm install` in `mobile/`, then in the OnTask panel in Chrome click **Pair a phone** and scan the QR code. Name your phone, and from then on they find each other on their own, even when your Mac's IP address changes.

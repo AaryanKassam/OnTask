@@ -1,58 +1,54 @@
 import { useState } from 'react';
 import { Platform } from 'react-native';
 import { LockSteps } from '@/components/LockSteps';
-import { Body, Button, Card, Field, Label, Row, Screen, Toggle } from '@/components/ui';
-import { updateSettings, useData } from '@/lib/store';
-
-const STATUS_TEXT: Record<string, string> = {
-  off: 'Not connected.',
-  connecting: 'Connecting…',
-  connected: 'Connected to your computer.',
-  disconnected: 'Can’t reach your computer. Is the companion running, and are you on the same Wi-Fi?',
-  error: 'Wrong pairing code.',
-};
+import { Body, Button, Card, Label, Row, Screen, Toggle } from '@/components/ui';
+import { router } from 'expo-router';
+import { unpair, updateSettings, useData } from '@/lib/store';
 
 export default function SettingsScreen() {
   const { loaded } = useData();
-  // The fields start from saved settings, so wait until they've loaded.
   return loaded ? <SettingsForm /> : <Screen>{null}</Screen>;
 }
 
 function SettingsForm() {
   const { settings, remote } = useData();
-  const [host, setHost] = useState(settings.companionHost);
-  const [code, setCode] = useState(settings.companionCode);
-  const paired = !!settings.companionHost && !!settings.companionCode;
+  const [confirm, setConfirm] = useState(false);
+  const c = settings.computer;
   const hub = remote.hub;
 
   return (
     <Screen>
       <Card>
         <Label>Your computer</Label>
-        <Body muted style={{ fontSize: 13 }}>
-          Run the companion on your Mac (cd companion, then npm start). It prints an address and a pairing code to enter here.
-        </Body>
-        <Field label="Computer address" placeholder="e.g. 192.168.1.20" value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="numbers-and-punctuation" />
-        <Field label="Pairing code" placeholder="e.g. K7Q4MX" value={code} onChangeText={setCode} autoCapitalize="characters" autoCorrect={false} />
-        <Body muted style={{ fontSize: 13 }}>
-          {remote.status === 'error' ? remote.detail || STATUS_TEXT.error : STATUS_TEXT[remote.status]}
-          {hub ? ` Chrome ${hub.devices.extension ? 'linked' : 'not linked'}. Screen watching ${['watching', 'idle'].includes(hub.watcher.status) ? 'on' : 'off'}.` : ''}
-        </Body>
-        <Row>
-          <Button flex title={paired ? 'Reconnect' : 'Connect'} disabled={!host.trim() || !code.trim()} onPress={() => updateSettings({ companionHost: host.trim(), companionCode: code.trim() })} />
-          {paired ? (
-            <Button
-              flex
-              kind="secondary"
-              title="Disconnect"
-              onPress={() => {
-                setHost('');
-                setCode('');
-                updateSettings({ companionHost: '', companionCode: '' });
-              }}
-            />
-          ) : null}
-        </Row>
+        {c ? (
+          <>
+            <Body style={{ fontWeight: '600' }}>{c.name}</Body>
+            <Body muted style={{ fontSize: 13 }}>
+              This phone is “{c.phoneName}”. {remote.status === 'connected' ? 'Connected.' : 'Not connected right now. It reconnects on its own when Chrome is open on the computer and you’re on the same Wi-Fi.'}
+              {hub ? ` Screen watching ${['watching', 'idle'].includes(hub.watcher.status) ? 'on' : 'off'}.` : ''}
+            </Body>
+            {confirm ? (
+              <Row>
+                <Button
+                  flex
+                  title="Unpair"
+                  onPress={() => {
+                    setConfirm(false);
+                    unpair();
+                  }}
+                />
+                <Button flex kind="secondary" title="Cancel" onPress={() => setConfirm(false)} />
+              </Row>
+            ) : (
+              <Button kind="secondary" title="Unpair this phone" onPress={() => setConfirm(true)} />
+            )}
+          </>
+        ) : (
+          <>
+            <Body muted>Not paired.</Body>
+            <Button title="Pair with your computer" onPress={() => router.push('/pair')} />
+          </>
+        )}
       </Card>
 
       <Card>

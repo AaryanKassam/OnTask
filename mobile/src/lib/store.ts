@@ -10,9 +10,27 @@ import * as alerts from './alerts.ts';
 import { fmtDur } from './format.ts';
 import * as sync from './sync.ts';
 
+// The computer this phone is paired with. Saved once at pairing, then kept
+// up to date (its IP address can change) every time they connect.
+export interface PairedComputer {
+  name: string; // e.g. Aaryan's MacBook Air
+  host: string; // Bonjour name, stays the same when the IP address changes
+  ip: string; // last address seen, the fallback
+  port: number;
+  token: string; // this phone's key
+  phoneName: string;
+}
+
+export interface PairingLink {
+  host: string;
+  ip: string;
+  port: number;
+  code: string;
+  computerName: string;
+}
+
 export interface Settings {
-  companionHost: string;
-  companionCode: string;
+  computer: PairedComputer | null;
   sound: boolean;
   vibration: boolean;
   keepAwake: boolean;
@@ -35,9 +53,11 @@ interface Data {
   pickups: number;
   awaySince: number | null;
   lastEnded: { task: string; thoughts: Thought[]; pickups: number } | null;
+  pairing: (PairingLink & { phoneName: string }) | null; // pairing in progress
+  notice: string | null; // e.g. "unpaired on your computer"
 }
 
-const DEFAULT_SETTINGS: Settings = { companionHost: '', companionCode: '', sound: true, vibration: true, keepAwake: true, lockTipSeen: false };
+const DEFAULT_SETTINGS: Settings = { computer: null, sound: true, vibration: true, keepAwake: true, lockTipSeen: false };
 const KEY = 'ontask.phone';
 const GRACE_MS = 15_000; // shorter trips away are a glance, not a pickup
 const LEAVE_IDS = ['leave-1', 'leave-2'];
@@ -52,6 +72,8 @@ let data: Data = {
   pickups: 0,
   awaySince: null,
   lastEnded: null,
+  pairing: null,
+  notice: null,
 };
 let appActive = AppState.currentState === 'active';
 let notifiedId: string | null = null;
@@ -87,7 +109,11 @@ export async function load() {
     ...data,
     ...saved,
     loaded: true,
+    // Older versions saved an address and code instead of a pairing; those
+    // fields are dropped and the phone pairs once more.
     settings: { ...DEFAULT_SETTINGS, ...saved.settings },
+    pairing: null,
+    notice: null,
     remote: { status: 'off', detail: '', hub: null },
     awaySince: null,
   };
@@ -155,11 +181,81 @@ const syncHandlers: sync.SyncHandlers = {
   onSessionEnded({ id }) {
     if (id === data.joinedId) finish();
   },
+  onPaired(token, phone) {
+    const p = data.pairing;
+    if (!p) return;
+    const computer: PairedComputer = { name: p.computerName, host: p.host, ip: p.ip, port: p.port, token, phoneName: phone.name };
+    sync.adoptToken(token); // reconnect as this phone from now on, not with the code
+    commit({ settings: { ...data.settings, computer }, pairing: null, notice: null });
+  },
+  onWelcome(computer) {
+    const c = data.settings.computer;
+    if (!c) return;
+    const ip = computer.addresses[0] ?? c.ip;
+    if (c.name === computer.name && c.host === computer.host && c.ip === ip && c.port === computer.port) return;
+    commit({ settings: { ...data.settings, computer: { ...c, name: computer.name, host: computer.host || c.host, ip, port: computer.port } } });
+  },
+  onForgotten() {
+    commit({ settings: { ...data.settings, computer: null }, joinedId: null, notice: 'This phone was unpaired on your computer. Pair it again to reconnect.' });
+    syncHandlers.onStatus('off', '');
+  },
 };
 
 function configureSync() {
-  const { companionHost: host, companionCode: code } = data.settings;
-  sync.configure(host && code ? { host, code } : null, syncHandlers);
+  const c = data.settings.computer;
+  const p = data.pairing;
+  if (c) sync.configure({ hosts: [c.host, c.ip], port: c.port, token: c.token }, syncHandlers);
+  else if (p) sync.configure({ hosts: [p.ip, p.host], port: p.port, pair: { code: p.code, name: p.phoneName } }, syncHandlers);
+  else sync.configure(null, syncHandlers);
+}
+
+// Read a pairing link from the QR code shown in Chrome. It works whether it
+// was scanned by the phone's camera (an Expo Go link) or inside the app.
+export function parsePairingLink(params: Record<string, string | string[] | undefined>): PairingLink | null {
+  const one = (k: string) => {
+    const v = params[k];
+    return (Array.isArray(v) ? v[0] : v)?.trim() ?? '';
+  };
+  const link = { host: one('h'), ip: one('i'), port: Number(one('p')) || 4517, code: sync.cleanCode(one('c')), computerName: one('n') || 'your computer' };
+  return (link.host || link.ip) && link.code ? link : null;
+}
+
+export function pairingLinkFromUrl(raw: string): PairingLink | null {
+  const query = raw.split('?')[1];
+  if (!query) return null;
+  return parsePairingLink(Object.fromEntries(new URLSearchParams(query)));
+}
+
+export function pairWith(link: PairingLink, phoneName: string) {
+  // Pairing with a new computer replaces the old one.
+  commit({ settings: { ...data.settings, computer: null }, joinedId: null, pairing: { ...link, phoneName: phoneName.trim() || 'My phone' }, notice: null });
+  configureSync();
+}
+
+// Scanning the QR code again from the same computer (to reopen the app after
+// its address changed) shouldn't pair a second time: just note the address.
+export function isSameComputer(link: PairingLink) {
+  const c = data.settings.computer;
+  return !!c && !!link.host && c.host === link.host;
+}
+
+export function refreshAddress(link: PairingLink) {
+  const c = data.settings.computer;
+  if (!c) return;
+  commit({ settings: { ...data.settings, computer: { ...c, ip: link.ip || c.ip, port: link.port } } });
+  configureSync();
+}
+
+export function cancelPairing() {
+  commit({ pairing: null });
+  configureSync();
+}
+
+// Unpair this phone. The computer forgets its key too.
+export function unpair() {
+  sync.send({ type: 'forget' });
+  commit({ settings: { ...data.settings, computer: null }, joinedId: null, pairing: null });
+  setTimeout(configureSync, 300); // let the forget message go out first
 }
 
 // --- actions ----------------------------------------------------------------
@@ -194,9 +290,8 @@ export const dismissSummary = () => commit({ lastEnded: null });
 export const parkThought = (text: string) => commit({ thoughts: [...data.thoughts, { at: Date.now(), text, done: false }] });
 export const toggleThought = (i: number) => commit({ thoughts: data.thoughts.map((t, j) => (j === i ? { ...t, done: !t.done } : t)) });
 
-export function updateSettings(patch: Partial<Settings>) {
+export function updateSettings(patch: Partial<Omit<Settings, 'computer'>>) {
   commit({ settings: { ...data.settings, ...patch } });
-  if (patch.companionHost !== undefined || patch.companionCode !== undefined) configureSync();
 }
 
 // Leaving OnTask mid-block: tell the computer, and nudge you back.

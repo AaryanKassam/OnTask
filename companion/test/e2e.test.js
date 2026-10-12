@@ -39,7 +39,7 @@ const phone = new WebSocket(`ws://127.0.0.1:${PORT}`);
 const phoneInbox = [];
 phone.on('message', (m) => phoneInbox.push(JSON.parse(m)));
 await new Promise((r) => phone.on('open', r));
-phone.send(JSON.stringify({ type: 'hello', token: CODE, device: 'phone' }));
+phone.send(JSON.stringify({ type: 'hello', device: 'phone', pair: { code: CODE, name: 'Test phone' } }));
 const phoneState = () => phoneInbox.filter((m) => m.type === 'state' || m.type === 'welcome').at(-1).state;
 
 test('extension pairs and its session, with the timer, reaches the phone', async () => {

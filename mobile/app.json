@@ -37,7 +37,13 @@
         }
       ],
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "OnTask uses the camera to scan the pairing code shown on your computer."
+        }
+      ]
     ],
     "scheme": "ontask",
     "experiments": {

@@ -1,62 +1,74 @@
-# Setting up the companion
+# Setting up OnTask
 
-The companion is a small program that runs on your Mac. It does two things:
-
-- **Links your phone.** When Chrome starts a session, the phone app offers to follow along with the same task and timer. Your computer sees when you pick up your phone.
-- **Watches your screen.** While a session is running, it checks which app is in front every 20 seconds. When that changes, it takes a screenshot, a vision model running on your Mac judges it against your task, and the screenshot is deleted straight away. If you stay off task in another app (Discord, a game, Messages) for 2 minutes, you get a notification. In Chrome, each tab switch triggers a fresh check, and its judgment replaces the extension's guess from the tab title. It also makes the extension's 20-second guess at your task.
-
-Nothing leaves your Mac except the link to your phone over your own Wi-Fi.
+You do this once. After that, opening Chrome starts everything, and your phone and Mac find each other on their own.
 
 ## What you need
 
-- A Mac with Apple silicon and 16 GB of memory or more (the model uses about 4 GB while running).
-- [Node.js](https://nodejs.org) 22 or newer.
-- [Ollama](https://ollama.com), which runs the vision model.
-- Your phone on the same Wi-Fi as your Mac, for the phone link.
+- A Mac with Apple silicon and 16 GB of memory or more.
+- [Node.js](https://nodejs.org) 22 or newer, and [Ollama](https://ollama.com).
+- Google Chrome (Brave, Edge and Arc work too).
+- **Expo Go** on your phone, from the App Store or Google Play.
 
-## Steps
-
-1. **Download the vision model** (3.3 GB, once):
-
-   ```sh
-   ollama pull qwen3-vl:4b
-   ```
-
-2. **Start the companion:**
-
-   ```sh
-   cd companion
-   npm install
-   npm start
-   ```
-
-   It prints a pairing code and your Mac's address. Keep this window open while you study.
-
-3. **Allow screen access.** The first time it checks your screen, macOS asks for two permissions for the app you ran `npm start` from (Terminal, iTerm or VS Code). Say yes to both, or turn them on in **System Settings → Privacy & Security**:
-   - **Screen & System Audio Recording**: so it can take screenshots. Restart the companion after turning this on.
-   - **Automation → System Events**: so it can see which app is in front.
-
-4. **Link the extension.** Click the OnTask icon in Chrome → **Settings** → **Companion app** → enter the pairing code → **Connect**. The line underneath should say *Connected*.
-
-5. **Link the phone.** In the OnTask app, tap the gear icon → **Your computer** → enter the address and pairing code → **Connect**. From then on, whenever Chrome starts a session, the phone asks **Connect?**
-
-## Options
+## One-time setup (Terminal, about 5 minutes)
 
 ```sh
-npm start -- --no-screen      # link devices only, no screen watching
-npm start -- --interval 30    # check the screen every 30 seconds instead of 20
-npm start -- --dwell 180      # wait 3 minutes off task before notifying
-npm start -- --model gemma3:4b  # use a different Ollama vision model
-npm start -- --new-code       # make a new pairing code (re-link both devices)
+ollama pull qwen3-vl:4b                 # the screen model, 3.3 GB
+
+cd ~/Documents/OnTask/companion
+npm install
+npm run setup                           # lets Chrome start the companion
+
+cd ../mobile
+npm install                             # the phone app
 ```
+
+Then in Chrome:
+
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. If OnTask is already there, click **Remove**. Its ID changed so Chrome can start the companion, so it has to be loaded again.
+3. Click **Load unpacked** and pick the `OnTask/extension` folder.
+4. Click the OnTask icon. Under **Settings**, the companion line should say *Running on (your Mac's name)*.
+5. The first time it looks at your screen, macOS asks to let **Google Chrome** record the screen and control **System Events**. Allow both, then quit and reopen Chrome. (Chrome starts the companion, so macOS asks on Chrome's behalf.)
+
+## Pair your phone (once)
+
+1. In the OnTask panel → **Settings** → **Pair a phone**. A QR code appears.
+2. On iPhone, scan it with the **Camera** app. On Android, scan it from **Expo Go**. OnTask opens in Expo Go.
+3. Name your phone (for example "Aaryan's iPhone") and tap **Pair**.
+
+That's it. Your phone shows up by name in Chrome, and the phone shows *Connected to (your Mac)*. From then on the phone finds your Mac by its network name, which doesn't change when the Wi-Fi gives your Mac a new IP address.
+
+## Every day after that
+
+1. Open Chrome. The companion, Ollama and the phone app server start on their own.
+2. Open OnTask on your phone: Expo Go → **Recently opened** → OnTask. If that entry stops working (it remembers your Mac's old IP address), click **Phone QR code** in the OnTask panel and scan it again. It opens the app without pairing again.
+3. Start a session in Chrome. Your phone asks **Connect?**
+
+## Managing phones
+
+- **See paired phones:** OnTask panel → Settings. Each phone is listed by name with when it was last seen.
+- **Unpair from the computer:** click **Forget** next to it.
+- **Unpair from the phone:** gear icon → **Unpair this phone**.
+
+## Running it yourself instead
+
+You can still start the companion from Terminal, for example to watch its log:
+
+```sh
+cd ~/Documents/OnTask/companion
+npm start                       # or: npm start -- --no-screen, --no-app, --interval 30, --dwell 180
+```
+
+If Chrome tries to start it while that's running, Chrome connects to yours instead.
 
 ## Troubleshooting
 
 | What you see | What to do |
 |---|---|
-| Extension says *Not connected* | Make sure `npm start` is still running. |
-| Phone says *Can't reach your computer* | Check both are on the same Wi-Fi. Some school and office networks block devices from talking to each other. A phone hotspot works. |
-| *Screen watching needs permission* | Turn on Screen Recording for your terminal (step 3), then restart the companion. |
-| The companion log keeps saying something like *Viewing the desktop* while you're in an app | macOS is only giving it your wallpaper, which means Screen Recording is off for your terminal. Turn it on (step 3) and restart. |
-| *Screen watching needs the model* | Run `ollama pull qwen3-vl:4b`, then restart the companion. |
-| The fan spins up | Use `--interval 60` so it checks less often. |
+| Companion says *Not set up yet* | Run `npm run setup` in `companion/`, then remove and re-load the extension. |
+| Phone says *Looking for (your Mac)* | Make sure Chrome is open on the Mac and both are on the same Wi-Fi. Some school networks block devices from seeing each other; a phone hotspot works. |
+| *Screen watching needs permission* | Turn on Screen Recording for Google Chrome in **System Settings → Privacy & Security**, then quit and reopen Chrome. |
+| *Screen watching needs the model* | Run `ollama pull qwen3-vl:4b`. |
+| Anything else | The companion's log is at `~/.ontask/companion.log`. |
+
+To undo the Chrome setup: `cd companion && npm run setup -- --remove`.

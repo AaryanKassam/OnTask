@@ -2,6 +2,8 @@
 // once a second while open; rebuilds the body only when the mode changes so
 // typing in a field isn't interrupted.
 
+import qrcode from './vendor/qrcode.mjs';
+
 const $ = (sel) => document.querySelector(sel);
 const send = (msg) => chrome.runtime.sendMessage(msg);
 
@@ -231,23 +233,87 @@ async function refresh(force = false) {
 
 const WATCHER_TEXT = {
   watching: 'watching the screen',
-  idle: 'screen watching ready',
+  idle: 'ready to watch the screen',
   'no-permission': 'screen watching needs permission',
   'no-model': 'screen watching needs the model',
   off: 'screen watching off',
   error: 'screen watcher error',
 };
 
+// A QR code as SVG. Always dark on white, whatever the theme, so it scans.
+function qrSvg(text) {
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const n = qr.getModuleCount();
+  const margin = 3;
+  const size = n + margin * 2;
+  let path = '';
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (qr.isDark(y, x)) path += `M${x + margin} ${y + margin}h1v1h-1z`;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'QR code for pairing a phone');
+  svg.innerHTML = `<rect width="${size}" height="${size}" fill="#fff"/><path d="${path}" fill="#000"/>`;
+  return svg;
+}
+
+function ago(ms) {
+  const m = Math.round(ms / 60_000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+}
+
+let phonesKey = '';
+let pairOpen = false;
+
 function updateCompanion(v) {
   const sync = v.sync ?? { status: 'off' };
-  let text = 'Not set up. Run the companion on this Mac to get a code.';
-  if (sync.status === 'connected' && sync.hub) {
-    const hub = sync.hub;
-    text = `Connected · ${hub.devices.phone ? 'phone linked' : 'phone not linked'} · ${WATCHER_TEXT[hub.watcher.status] ?? hub.watcher.status}`;
+  const hub = sync.status === 'connected' ? sync.hub : null;
+  const where = sync.computer?.name ? ` on ${sync.computer.name}` : '';
+  let text;
+  if (hub) {
+    text = `Running${where} · ${WATCHER_TEXT[hub.watcher.status] ?? hub.watcher.status}`;
     if (['no-permission', 'no-model', 'error'].includes(hub.watcher.status) && hub.watcher.detail) text += `: ${hub.watcher.detail}`;
-  } else if (sync.status === 'error') text = sync.detail || 'Wrong pairing code';
+  } else if (sync.status === 'not-installed') text = 'Not set up yet.';
+  else if (sync.status === 'error') text = sync.detail || 'Wrong pairing code';
+  else if (sync.status === 'starting') text = 'Starting…';
   else if (sync.paired) text = 'Not connected. Is the companion running?';
+  else text = 'Not set up yet.';
   $('#companion-status').textContent = text;
+  $('#companion-setup').hidden = !!hub || (sync.paired && sync.status !== 'not-installed' && sync.status !== 'error');
+
+  // Paired phones, rebuilt only when something about them changes.
+  const phones = hub?.devices.phones ?? [];
+  const key = JSON.stringify(phones.map((p) => [p.id, p.name, p.connected, Math.round((v.now - p.lastSeen) / 60_000)]));
+  if (key !== phonesKey) {
+    phonesKey = key;
+    $('#phones').replaceChildren(
+      ...phones.map((p) => {
+        const forget = el('button', { className: 'link', textContent: 'Forget', title: `Unpair ${p.name}` });
+        forget.onclick = () => send({ type: 'forget-phone', phoneId: p.id });
+        return el('li', {}, [
+          el('span', {}, [el('span', { className: 'phone-name', textContent: p.name }), ` · ${p.connected ? 'connected' : `seen ${ago(v.now - p.lastSeen)}`}`]),
+          forget,
+        ]);
+      }),
+    );
+  }
+  const pairButton = $('#pair-phone');
+  pairButton.hidden = !hub;
+  pairButton.textContent = pairOpen ? 'Done' : phones.length ? 'Phone QR code (open or pair)' : 'Pair a phone';
+  if (!hub) pairOpen = false;
+  $('#pair-panel').hidden = !pairOpen;
+}
+
+function openPairPanel(v) {
+  const sync = v.sync;
+  const link = sync.pairUrl;
+  $('#pair-qr').replaceChildren(link ? qrSvg(link) : el('p', { className: 'muted small', textContent: 'Restart the companion to get a pairing link.' }));
+  const c = sync.computer;
+  $('#pair-manual').textContent = c ? `Can’t scan? In the app, tap Pair manually and enter ${c.host || c.addresses?.[0] || 'this Mac’s address'} and code ${sync.code ?? ''}.` : '';
 }
 
 async function initSettings() {
@@ -271,7 +337,11 @@ async function initSettings() {
   $('#idle').onchange = (e) => send({ type: 'save-settings', settings: { idleMinutes: Number(e.target.value) } });
   $('#sound').onchange = (e) => send({ type: 'save-settings', settings: { sound: e.target.checked } });
   $('#test-sound').onclick = () => send({ type: 'test-sound' });
-  $('#companion-code').placeholder = v.sync?.paired ? 'Paired. Enter a new code to change' : 'Pairing code';
+  $('#pair-phone').onclick = () => {
+    pairOpen = !pairOpen;
+    if (pairOpen && view) openPairPanel(view);
+    refresh();
+  };
   $('#companion-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     await send({ type: 'pair-companion', code: $('#companion-code').value });

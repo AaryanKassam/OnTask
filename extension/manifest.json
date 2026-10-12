@@ -1,15 +1,17 @@
 {
   "manifest_version": 3,
   "name": "OnTask",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Works out what you're doing from your tabs, checks the guess with you, and nudges you when you've drifted off it.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuXNXksWXt6YH+bTgbda++U871GoX2uTUpg6Tz2YtcDpnYQAzFGJZoifsv92PEAc1VLKtvfWUvq9Jx8gH4n3BAQ91Yf6WYyUIw2PTFG92gSwdIckhu9rkg9hxkDp3XyGQs0rLZKzG3nNEL2h3x77m0JqVsbzRGvuDUxeJiwGYb1uzce67xb1Icpf6Tww/cTRpYycJ9ggWyc1InqwQ6eTOHrKU8y1XGrQhViRft8ZZ/1dtBhEQcrk83moji+5gzyIObaXUZOgvcRkCJG7c8sTblUoa2x6HKTe1uVHjy4hZk3+Kdgd9s/LcZsUac+lMGGoifEqT0Jpk8rqJ7MGOol2L9wIDAQAB",
   "permissions": [
     "tabs",
     "storage",
     "alarms",
     "scripting",
     "idle",
-    "offscreen"
+    "offscreen",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "<all_urls>"
