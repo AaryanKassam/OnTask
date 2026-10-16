@@ -12,6 +12,7 @@ import { Body, Button, Card, Field, Label, Row, Screen, Title, useTheme } from '
 import { LockSteps } from '@/components/LockSteps';
 import { fmtClock } from '@/lib/format';
 import * as store from '@/lib/store';
+import { appById, type OnTaskApp } from '@/lib/ontaskApps';
 import type { HubState } from '@/lib/sync';
 import { useNow } from '@/lib/useNow';
 
@@ -191,7 +192,7 @@ function Following({ hub }: { hub: HubState }) {
         </Body>
       ) : null}
 
-      {onBreak ? <BreakApps /> : null}
+      {onBreak ? <BreakApps /> : <OnTaskApps />}
       <Thoughts thoughts={thoughts} />
       {!onBreak && !settings.lockTipSeen ? <LockTip /> : null}
 
@@ -200,6 +201,46 @@ function Following({ hub }: { hub: HubState }) {
       </Body>
       <Button kind="ghost" title="Stop following on this phone" onPress={store.leave} />
     </View>
+  );
+}
+
+// The apps you've allowed yourself for this work, one tap away. Opening them
+// from here doesn't count as leaving OnTask.
+function OnTaskApps() {
+  const { settings } = store.useData();
+  const [failed, setFailed] = useState<string | null>(null);
+  const apps = settings.ontaskApps.map((id) => appById(id)).filter((a): a is OnTaskApp => !!a);
+  if (!apps.length) {
+    return (
+      <Card>
+        <Label>OnTask Apps</Label>
+        <Body muted>Doing the work in another app, like Notes or GoodNotes? Choose your OnTask Apps and open them from here without it counting as leaving.</Body>
+        <Button kind="secondary" title="Choose OnTask Apps" onPress={() => router.push('/apps')} />
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Label>OnTask Apps</Label>
+        <Pressable accessibilityRole="button" onPress={() => router.push('/apps')} hitSlop={10}>
+          <Body muted style={{ textDecorationLine: 'underline', fontSize: 14 }}>
+            Edit
+          </Body>
+        </Pressable>
+      </View>
+      <Row gap={8}>
+        {apps.map((app) => (
+          <Button
+            key={app.id}
+            kind="secondary"
+            title={app.name}
+            onPress={async () => setFailed((await store.openOnTaskApp(app)) ? null : app.name)}
+          />
+        ))}
+      </Row>
+      {failed ? <Body muted style={{ fontSize: 13 }}>Couldn’t open {failed}. Is it installed?</Body> : null}
+    </Card>
   );
 }
 

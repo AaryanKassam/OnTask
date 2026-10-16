@@ -66,7 +66,8 @@ export function installChrome({ now = Date.UTC(2026, 9, 12, 14), tabs = [], sett
     scripting: {
       executeScript: async (o) => {
         const tab = t.tabs.find((x) => x.id === o.target.tabId);
-        if (tab?.url?.startsWith('chrome')) throw new Error('Cannot access a chrome:// URL');
+        if (tab?.url?.startsWith('chrome') || tab?.unreadable) throw new Error('Cannot access this page');
+        if (o.func?.name === 'readVisiblePage') return [{ result: tab?.page ?? { lines: [], totalWords: 0 } }];
         if (o.args) t.injected.push({ tabId: o.target.tabId, view: o.args[0] });
         else if (o.func) t.hidden++;
       },
@@ -102,6 +103,10 @@ export function installChrome({ now = Date.UTC(2026, 9, 12, 14), tabs = [], sett
       t.tabs.forEach((x) => (x.active = x.id === id));
       chrome.tabs.onActivated.fire({ tabId: id });
       await settle();
+    },
+    async idle(state) {
+      chrome.idle.onStateChanged.fire(state);
+      await settle(60);
     },
     async fire(name) {
       chrome.alarms.onAlarm.fire({ name });

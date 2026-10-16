@@ -8,7 +8,7 @@ import { Platform, View } from 'react-native';
 import { Body, Button, Card, Field, Label, Row, Screen, Title } from '@/components/ui';
 import * as store from '@/lib/store';
 
-const DEFAULT_NAME = Platform.OS === 'android' ? 'My Android phone' : 'My iPhone';
+const DEFAULT_NAME = Platform.OS === 'android' ? 'My Android phone' : Platform.OS === 'ios' && Platform.isPad ? 'My iPad' : 'My iPhone';
 
 export default function PairScreen() {
   const params = useLocalSearchParams();

@@ -101,6 +101,29 @@ test('with no answer, the 20-second guess comes from the local model on the comp
   assert.equal(t.lastCard().kind, 'confirm');
 });
 
+test('a textbook PDF the extension can’t read: the companion reads the screen and it asks about questions', async () => {
+  hub.onRequest('read-screen', (_d, msg, reply) =>
+    reply({
+      type: 'read-screen-result',
+      reqId: msg.reqId,
+      lines: ['Chapter 4 Eigenvalues', 'Theorem 4.3.1 An n x n matrix A is diagonalizable', 'Exercises 4.3', '1. Determine whether A is diagonalizable.', '2. Find P and D.'],
+    }),
+  );
+  await t.answer('confirm-yes');
+  await t.settle(100);
+  const before = t.windows.length;
+  await t.visit(9, 'https://example.com/linear-algebra.pdf', 'linear-algebra.pdf');
+  t.tabs.find((x) => x.id === 9).unreadable = true;
+  t.now += 2 * 60_000;
+  await t.idle('idle');
+  await t.settle(200);
+  // Chrome won't let the card be drawn on a PDF, so it opens OnTask's small prompt window instead.
+  const windows = t.windows.length - before;
+  assert.equal(t.state().prompt.kind, 'questions');
+  assert.equal(t.state().study.analysis.textbook, true);
+  assert.ok(windows >= 1, 'shown in the prompt window');
+});
+
 test('cleanup', async () => {
   phone.close();
   await hub.close();

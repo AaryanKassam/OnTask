@@ -4,7 +4,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { useTheme } from '@/components/ui';
-import { load, onAppStateChange, useData } from '@/lib/store';
+import { onBackOnTask } from '@/lib/alerts';
+import { backOnTask, load, onAppStateChange, useData } from '@/lib/store';
 
 // Connects to the computer and watches the app going to the background.
 function Engine() {
@@ -13,7 +14,11 @@ function Engine() {
   useEffect(() => {
     load();
     const sub = AppState.addEventListener('change', onAppStateChange);
-    return () => sub.remove();
+    const stopBack = onBackOnTask(backOnTask);
+    return () => {
+      sub.remove();
+      stopBack();
+    };
   }, []);
 
   // Keep the screen on while following a focus block, so the phone can sit
@@ -41,6 +46,7 @@ export default function RootLayout() {
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ presentation: 'modal', title: 'Settings' }} />
         <Stack.Screen name="pair" options={{ headerShown: false }} />
+        <Stack.Screen name="apps" options={{ presentation: 'modal', title: 'OnTask Apps' }} />
       </Stack>
     </>
   );

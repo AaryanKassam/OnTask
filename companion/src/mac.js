@@ -4,7 +4,8 @@
 import { execFile } from 'node:child_process';
 import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -49,6 +50,27 @@ export async function screenshot(maxSize = 1280) {
   } finally {
     await rm(png, { force: true });
     await rm(jpg, { force: true });
+  }
+}
+
+const OCR_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'native', 'ocr.js');
+
+// The text on screen right now, line by line, read with Apple's Vision
+// framework on this Mac. The screenshot is deleted straight away.
+export async function readScreenText() {
+  const png = join(tmpdir(), `ontask-read-${process.pid}-${Date.now()}.png`);
+  try {
+    try {
+      await run('screencapture', ['-x', '-m', '-t', 'png', png], { timeout: 10000 });
+    } catch (err) {
+      throw new PermissionError(`screencapture failed: ${err.stderr || err.message}`);
+    }
+    const { stdout } = await run('osascript', ['-l', 'JavaScript', OCR_SCRIPT, png], { timeout: 20000, maxBuffer: 8 * 1024 * 1024 });
+    const out = JSON.parse(stdout);
+    if (out.error) throw new Error(out.error);
+    return out.lines.map((l) => l.text);
+  } finally {
+    await rm(png, { force: true });
   }
 }
 

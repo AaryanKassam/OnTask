@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { CONFIG_DIR, computerInfo, loadConfig } from './config.js';
 import { createHub } from './hub.js';
-import { screenshot } from './mac.js';
+import { readScreenText, screenshot } from './mac.js';
 import { startNative } from './native.js';
 import { APP_PORT, ensureOllama, startAppServer } from './services.js';
 import { DEFAULT_MODEL, inferTask } from './vision.js';
@@ -122,6 +122,16 @@ if (status === 'no-ollama') {
 
 // The extension switched tabs: look at the screen right away.
 hub.onRequest('check-now', () => watcher?.checkNow());
+
+// What's on screen, as text, for the extension's reading check on pages it
+// can't read itself (PDFs, for example). Stays on this Mac.
+hub.onRequest('read-screen', async (_device, msg, reply) => {
+  const lines = await readScreenText().catch((err) => {
+    log(`couldn't read the screen: ${err.message}`);
+    return null;
+  });
+  reply({ type: 'read-screen-result', reqId: msg.reqId, lines });
+});
 
 // The extension's 20-second guess at the task, made with the local model
 // from recent page titles plus, when allowed, what's on screen right now.

@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/be4bcde3-9a71-41a7-8cbc-2895da7ba170
 1. **Asks what you're working on.** Answer in the card, or just keep working. After 20 seconds it guesses and checks: *Are you working on "CS 246 notes"?*
 2. **Ignores quick glances.** A quick look at something unrelated does nothing. It only prompts once you've stayed off task for 2 minutes. Then you can go **Back to task**, say **Yes, this counts**, or snooze.
 3. **Every timer lives here.** Pomodoro (25/5), short sprints (15/3), 52/17, deep work (90/20), Flowtime (break when you stop) or your own times. At each break you get links to TikTok, YouTube, Instagram and X, and drift prompts pause until it ends.
-4. **Notices when you zone out.** After 5 minutes with no typing or scrolling, a chime and a *Still with it?* card, unless the tab is playing audio, like a lecture.
+4. **Knows reading from zoning out.** After a minute without typing or scrolling, it looks at how much text is on screen and estimates how long it takes to read. On a text-heavy page it quietly asks *Reading?*; on a textbook page with exercises it asks *Working through the questions?* (no sound, so you aren't pulled out of the page). Say yes and the clock keeps running for that long. PDFs are read off the screen by the companion. Otherwise, after 5 minutes with no input: a chime and *Still with it?*, unless a tab is playing audio, like a lecture.
 5. **Summarises each session.** Time on task, drifts, and where the drift went.
 
 **Install:** download this repo (**Code → Download ZIP**) or `git clone` it. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and select the **`extension`** folder.
@@ -38,7 +38,9 @@ The computer is in charge, so the app is one screen:
 - When Chrome starts a session, the app asks **Connect?**, then shows the same task and timer.
 - **Park a thought** when something pops into your head; review them on your break.
 - At break time it chimes and gives you TikTok, YouTube, Instagram and X. When the break ends, it calls you back.
-- Leaving the app mid-block sends a reminder, and your computer sees the pickup.
+- **OnTask Apps:** choose the apps you use for the work (Notes, GoodNotes, Notability…) and open them from the timer screen without it counting as leaving. Great for doing questions on an iPad while your textbook is on the computer.
+- Leaving the app mid-block sends a reminder, and tapping it takes you back to the last OnTask App you were using. Your computer sees the pickup.
+- Seeing *which* app you switched to, and blocking the others, needs Apple's Screen Time access, which comes with the full (non–Expo Go) build.
 - To truly lock your phone to OnTask, use **Guided Access** (iPhone) or **app pinning** (Android). The app walks you through it.
 
 **Pair it once:** install **Expo Go**, then in Chrome open OnTask → **Paired devices** → **Manage** → **Pair a phone** and scan the QR code. Name your phone, and from then on they find each other on their own, even when your Mac's IP address changes. The Devices tab lets you switch each paired device on or off.

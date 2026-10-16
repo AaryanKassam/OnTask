@@ -8,6 +8,7 @@ import { useSyncExternalStore } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import * as alerts from './alerts.ts';
 import { fmtDur } from './format.ts';
+import { appById, openApp, type OnTaskApp } from './ontaskApps.ts';
 import * as sync from './sync.ts';
 
 // The computer this phone is paired with. Saved once at pairing, then kept
@@ -35,6 +36,7 @@ export interface Settings {
   vibration: boolean;
   keepAwake: boolean;
   lockTipSeen: boolean;
+  ontaskApps: string[]; // ids from ONTASK_APPS you allow yourself during a session
 }
 
 export interface Thought {
@@ -56,9 +58,10 @@ interface Data {
   pairing: (PairingLink & { phoneName: string }) | null; // pairing in progress
   notice: string | null; // e.g. "unpaired on your computer"
   active: boolean; // switched on in Chrome's Devices tab
+  lastOnTaskApp: string | null; // the OnTask App you were last sent to
 }
 
-const DEFAULT_SETTINGS: Settings = { computer: null, sound: true, vibration: true, keepAwake: true, lockTipSeen: false };
+const DEFAULT_SETTINGS: Settings = { computer: null, sound: true, vibration: true, keepAwake: true, lockTipSeen: false, ontaskApps: [] };
 const KEY = 'ontask.phone';
 const GRACE_MS = 15_000; // shorter trips away are a glance, not a pickup
 const LEAVE_IDS = ['leave-1', 'leave-2'];
@@ -76,7 +79,11 @@ let data: Data = {
   pairing: null,
   notice: null,
   active: true,
+  lastOnTaskApp: null,
 };
+// Set just before OnTask opens one of your OnTask Apps, so leaving for it
+// isn't treated as picking up the phone.
+let openingOnTaskAppAt = 0;
 let appActive = AppState.currentState === 'active';
 let notifiedId: string | null = null;
 let lastPhase: string | null = null;
@@ -85,8 +92,8 @@ const listeners = new Set<() => void>();
 function commit(patch: Partial<Data>) {
   data = { ...data, ...patch };
   listeners.forEach((l) => l());
-  const { settings, joinedId, declinedId, thoughts, pickups, lastEnded } = data;
-  AsyncStorage.setItem(KEY, JSON.stringify({ settings, joinedId, declinedId, thoughts, pickups, lastEnded })).catch(() => {});
+  const { settings, joinedId, declinedId, thoughts, pickups, lastEnded, lastOnTaskApp } = data;
+  AsyncStorage.setItem(KEY, JSON.stringify({ settings, joinedId, declinedId, thoughts, pickups, lastEnded, lastOnTaskApp })).catch(() => {});
 }
 
 export function useData(): Data {
@@ -299,6 +306,21 @@ export const dismissSummary = () => commit({ lastEnded: null });
 export const parkThought = (text: string) => commit({ thoughts: [...data.thoughts, { at: Date.now(), text, done: false }] });
 export const toggleThought = (i: number) => commit({ thoughts: data.thoughts.map((t, j) => (j === i ? { ...t, done: !t.done } : t)) });
 
+// Open one of your OnTask Apps. Leaving OnTask for it is fine.
+export async function openOnTaskApp(app: OnTaskApp): Promise<boolean> {
+  openingOnTaskAppAt = Date.now();
+  const ok = await openApp(app);
+  if (ok) commit({ lastOnTaskApp: app.id });
+  else openingOnTaskAppAt = 0;
+  return ok;
+}
+
+// From a reminder: back to the OnTask App you were using, if any.
+export function backOnTask() {
+  const app = appById(data.lastOnTaskApp);
+  if (app && joinedSession()) setTimeout(() => openOnTaskApp(app), 300);
+}
+
 export function updateSettings(patch: Partial<Omit<Settings, 'computer'>>) {
   commit({ settings: { ...data.settings, ...patch } });
 }
@@ -310,15 +332,23 @@ export function onAppStateChange(status: AppStateStatus) {
   if (status === 'background') {
     appActive = false;
     if (!s || s.timer?.phase === 'break') return;
+    // Going to one of your OnTask Apps from OnTask isn't leaving the task.
+    if (now - openingOnTaskAppAt < 5000) return;
     commit({ awaySince: now });
     sync.send({ type: 'phone-away' });
     const endsAt = s.timer?.endsAt ?? null;
     const left = endsAt ? endsAt - now : null;
+    const back = appById(data.lastOnTaskApp);
     const reminders = [
-      { id: LEAVE_IDS[0], at: now + GRACE_MS, title: 'Still on task?', body: `${s.task}${left && left > 0 ? ` · ${fmtDur(left)} left in this block` : ''}.` },
-      { id: LEAVE_IDS[1], at: now + GRACE_MS + 3 * 60_000, title: 'You left OnTask', body: `${s.task} is waiting for you.` },
+      {
+        id: LEAVE_IDS[0],
+        at: now + GRACE_MS,
+        title: back ? `Back to ${back.name}?` : 'Still on task?',
+        body: `${s.task}${left && left > 0 ? ` · ${fmtDur(left)} left in this block` : ''}.${back ? ` Tap to go back to ${back.name}.` : ''}`,
+      },
+      { id: LEAVE_IDS[1], at: now + GRACE_MS + 3 * 60_000, title: 'You left OnTask', body: `${s.task} is waiting for you.${back ? ` Tap to go back to ${back.name}.` : ''}` },
     ];
-    for (const r of reminders) if (!endsAt || r.at < endsAt) notify(r.id, r.at, r.title, r.body);
+    for (const r of reminders) if (!endsAt || r.at < endsAt) alerts.scheduleAt(r.id, r.at, r.title, r.body, data.settings.sound, true);
   } else if (status === 'active') {
     appActive = true;
     alerts.cancel(...LEAVE_IDS);

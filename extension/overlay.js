@@ -167,6 +167,27 @@
         el('p', { textContent: `Back to “${p.task}”.` }),
         el('div', { className: 'actions' }, [button('Back to task', 'primary', () => answer('resume-back'))]),
       );
+    } else if (p.kind === 'reading') {
+      const whole = p.totalWords && p.totalWords > p.words * 1.5 ? ` The whole page is about ${p.totalWords.toLocaleString()} words.` : '';
+      card.replaceChildren(
+        header('study-later', 'Close'),
+        el('h2', { textContent: 'Reading?' }),
+        el('p', { textContent: `About ${p.words.toLocaleString()} words on screen, roughly ${p.minutes} min of reading.${whole} If you’re reading, I’ll keep the clock running and stay out of the way.` }),
+        el('div', { className: 'actions' }, [
+          button('Yes, reading', 'primary', () => answer('study-yes')),
+          button('No', 'secondary', () => answer('study-no')),
+        ]),
+      );
+    } else if (p.kind === 'questions') {
+      card.replaceChildren(
+        header('study-later', 'Close'),
+        el('h2', { textContent: 'Working through the questions?' }),
+        el('p', { textContent: 'Looks like a textbook page with exercises. If you’re doing them on paper or another device, I’ll keep the clock running until this block ends.' }),
+        el('div', { className: 'actions' }, [
+          button('Yes, doing questions', 'primary', () => answer('study-yes')),
+          button('No', 'secondary', () => answer('study-no')),
+        ]),
+      );
     } else if (p.kind === 'idle') {
       card.replaceChildren(
         header('idle-here', 'Close'),

@@ -102,7 +102,7 @@ async function connectSocket() {
       }
       await setStatus('connected', '', msg.state);
       handlers?.onState(msg.state, msg.type === 'welcome');
-    } else if (msg.type === 'infer-result' && pending.has(msg.reqId)) {
+    } else if (msg.reqId && pending.has(msg.reqId)) { // a reply to request()
       pending.get(msg.reqId)(msg);
       pending.delete(msg.reqId);
     } else if (msg.type === 'session-ended') {

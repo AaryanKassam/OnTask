@@ -9,6 +9,7 @@
 
 import { classifyPage, inferTask, domainOf, cleanTitle, isNeutralUrl } from './classifier.js';
 import { initSync, connect as connectSync, getSync, pair, request as syncRequest, send as syncSend } from './sync.js';
+import { analyzeText, readVisiblePage, studyAllowanceMs, studyPrompt } from './reading.js';
 
 const DEFAULTS = { dwellSeconds: 120, timer: 'pomodoro', customFocusMin: 30, customBreakMin: 5, idleMinutes: 5, sound: true };
 const ASK_SECONDS = 20; // how long to wait for "what are you working on?" before guessing
@@ -39,11 +40,11 @@ const MIN_OBSERVED_MS = 10_000;
 const MAX_OBSERVATIONS = 200;
 const HISTORY_LIMIT = 30;
 
-// Chrome reports "idle" after this long without keyboard or mouse input.
-function applyIdleInterval(settings) {
-  chrome.idle.setDetectionInterval(Math.max(60, (settings.idleMinutes || 2) * 60));
-}
-getSettings().then(applyIdleInterval);
+// Chrome reports "idle" after a minute without typing, scrolling or clicking.
+// That's early enough to ask about reading before the clock would pause; the
+// idle limit in settings decides when to actually check in.
+const STILL_SECONDS = 60;
+chrome.idle.setDetectionInterval(STILL_SECONDS);
 
 // --- storage ----------------------------------------------------------------
 
@@ -529,8 +530,8 @@ function newPrompt(kind, fields) {
 }
 
 function promptView(p) {
-  const { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes, seconds } = p;
-  return { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes, seconds };
+  const { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes, seconds, words, totalWords } = p;
+  return { id, kind, guess, task, domain, driftStart, minutes, blocksDone, isLong, idleMinutes, seconds, words, totalWords };
 }
 
 async function injectOverlay(tabId, view) {
@@ -552,9 +553,11 @@ async function showPrompt(s) {
     p.shownUrls.push(c.tabId + c.url);
     return;
   }
+  // Reading and questions prompts shouldn't pull anyone out of what they're reading.
+  const quiet = p.kind === 'reading' || p.kind === 'questions';
   if (p.windowId) {
     try {
-      await chrome.windows.update(p.windowId, { focused: true });
+      await chrome.windows.update(p.windowId, quiet ? { drawAttention: true } : { focused: true });
       return;
     } catch {
       p.windowId = null;
@@ -564,7 +567,7 @@ async function showPrompt(s) {
   const width = 380;
   const height = 280;
   const placement = anchor?.left != null ? { left: Math.max(0, anchor.left + anchor.width - width - 24), top: anchor.top + 72 } : {};
-  const win = await chrome.windows.create({ url: chrome.runtime.getURL('prompt.html'), type: 'popup', width, height, focused: true, ...placement });
+  const win = await chrome.windows.create({ url: chrome.runtime.getURL('prompt.html'), type: 'popup', width, height, focused: !quiet, ...placement });
   p.windowId = win.id;
 }
 
@@ -635,6 +638,29 @@ async function answer({ promptId, action, value }) {
       s.snoozeUntil = now + SNOOZE_MS;
       await scheduleDwell(s);
       break;
+    case 'study-yes': {
+      // They're reading or doing questions: keep the clock running and stay
+      // quiet for as long as that should take.
+      const st = s.study;
+      if (st) {
+        const blockEnd = s.timer?.phase === 'focus' ? s.timer.endsAt : null;
+        st.until = now + studyAllowanceMs(st.kind, st.analysis, now, blockEnd);
+        s.idle = false;
+        if (s.current && cacheKey(s.current) === st.key) {
+          accrue(s, now);
+          await applyVerdict(s, { verdict: 'on', reason: st.kind === 'questions' ? 'Doing the questions' : 'Reading' });
+        }
+        if (s.stillSince) await chrome.alarms.create('idle-check', { when: st.until });
+      }
+      break;
+    }
+    case 'study-no':
+      if (s.study) {
+        s.studyDeclined = { ...(s.studyDeclined ?? {}), [s.study.key]: true };
+        s.study = null;
+        if (s.stillSince) await chrome.alarms.create('idle-check', { when: Math.max(now + 1000, s.stillSince + idleLimitMs(settings)) });
+      }
+      break;
     case 'break-skip':
       if (inBreak(s)) {
         accrue(s, now);
@@ -693,7 +719,6 @@ async function saveSettings(patch) {
   const { settings } = await chrome.storage.local.get('settings');
   await chrome.storage.local.set({ settings: { ...settings, ...patch } });
   const next = await getSettings();
-  if (patch.idleMinutes !== undefined) applyIdleInterval(next);
   const s = await loadState();
   if (patch.dwellSeconds !== undefined && s.driftStart) await scheduleDwell(s);
   const timerChanged = patch.timer !== undefined || patch.customFocusMin !== undefined || patch.customBreakMin !== undefined;
@@ -861,28 +886,107 @@ chrome.windows.onRemoved.addListener((windowId) =>
   }),
 );
 
-// Idle on a page for too long: a chime and a "still with it?" card. A tab
-// playing audio (a lecture video) is someone listening, not someone idle, and
-// a locked screen is someone who walked away on purpose.
+// --- going still: reading, doing questions, or idle -------------------------
+
+const idleLimitMs = (settings) => Math.max(2, settings.idleMinutes || 0) * 60_000;
+
+const studyActive = (s, now = Date.now()) => !!s.study?.until && s.study.until > now && !!s.current && cacheKey(s.current) === s.study.key;
+
+// What's on the page in front of them: read straight from the page, or, for
+// PDFs and pages extensions can't read, from the screen via the companion.
+async function readCurrentPage(c) {
+  try {
+    const [res] = await chrome.scripting.executeScript({ target: { tabId: c.tabId }, func: readVisiblePage });
+    if (res?.result?.lines?.length) return { ...analyzeText(res.result.lines), totalWords: res.result.totalWords };
+  } catch {
+    // a PDF or a page Chrome doesn't let extensions read
+  }
+  const reply = await syncRequest({ type: 'read-screen' }, 8000);
+  return reply?.lines?.length ? { ...analyzeText(reply.lines), totalWords: null } : null;
+}
+
+// A minute without input. On a page full of text that probably means
+// reading, so ask quietly instead of assuming they've gone; on a textbook
+// page with exercises, ask whether they're doing the questions. Otherwise,
+// check in once the idle limit is reached.
+async function onStill(s, settings, now) {
+  s.stillSince = now - STILL_SECONDS * 1000;
+  const c = s.current;
+  let waitMs = idleLimitMs(settings);
+  if (s.mode === 'active' && c && !c.neutral && !inBreak(s)) {
+    if (studyActive(s, now)) {
+      await chrome.alarms.create('idle-check', { when: s.study.until });
+      return;
+    }
+    const key = cacheKey(c);
+    const analysis = s.studyDeclined?.[key] ? null : await readCurrentPage(c);
+    const kind = studyPrompt(analysis);
+    if (kind) {
+      s.study = { key, kind, analysis, until: null };
+      if (s.prompt) await hidePrompt(s);
+      s.prompt = newPrompt(kind, {
+        words: analysis.words,
+        totalWords: analysis.totalWords,
+        minutes: Math.max(1, Math.round(analysis.readMs / 60_000)),
+      });
+      await showPrompt(s); // no chime: this one shouldn't pull them out of the page
+      s.stats.studyAsks = (s.stats.studyAsks || 0) + 1;
+      // Give them the benefit of the doubt while the question is up.
+      waitMs = Math.max(waitMs, studyAllowanceMs(kind, analysis, now, s.timer?.phase === 'focus' ? s.timer.endsAt : null));
+    }
+  }
+  await chrome.alarms.create('idle-check', { when: s.stillSince + waitMs });
+}
+
+// Still idle at the limit (and not reading or doing questions): stop the
+// clock, and in a session, chime and ask "Still with it?".
+async function onIdleCheck() {
+  const s = await loadState();
+  if (s.mode === 'off' || !s.stillSince) return;
+  const now = Date.now();
+  if (studyActive(s, now)) {
+    await chrome.alarms.create('idle-check', { when: s.study.until });
+    return;
+  }
+  const settings = await getSettings();
+  let chime = false;
+  if (s.mode === 'active' && settings.idleMinutes > 0 && !inBreak(s) && s.current && !s.current.neutral) {
+    if (s.prompt) await hidePrompt(s);
+    s.prompt = newPrompt('idle', { domain: s.current.domain, idleMinutes: Math.round((now - s.stillSince) / 60_000) });
+    await showPrompt(s);
+    s.stats.idles = (s.stats.idles || 0) + 1;
+    chime = true;
+  }
+  s.idle = true;
+  s.study = null;
+  await saveState(s);
+  await evaluate();
+  if (chime) await playChime();
+}
+
+// A tab playing audio (a lecture video) is someone listening, not someone
+// idle, and a locked screen is someone who walked away on purpose.
 chrome.idle.onStateChanged.addListener((idleState) =>
   locked(async () => {
     const s = await loadState();
     if (s.mode === 'off') return;
-    const settings = await getSettings();
-    const tab = s.current && !s.current.neutral ? await chrome.tabs.get(s.current.tabId).catch(() => null) : null;
-    const listening = idleState === 'idle' && !!tab?.audible;
-    let chime = false;
-    if (idleState === 'idle' && !listening && s.mode === 'active' && settings.idleMinutes > 0 && !inBreak(s) && tab) {
-      if (s.prompt) await hidePrompt(s);
-      s.prompt = newPrompt('idle', { domain: s.current.domain, idleMinutes: settings.idleMinutes });
-      await showPrompt(s);
-      s.stats.idles = (s.stats.idles || 0) + 1;
-      chime = true;
+    const now = Date.now();
+    if (idleState === 'active') {
+      s.stillSince = null;
+      s.idle = false;
+      await chrome.alarms.clear('idle-check');
+    } else if (idleState === 'locked') {
+      s.stillSince = null;
+      s.idle = true;
+      s.study = null;
+      await chrome.alarms.clear('idle-check');
+    } else {
+      const tab = s.current && !s.current.neutral ? await chrome.tabs.get(s.current.tabId).catch(() => null) : null;
+      if (tab?.audible) return; // listening
+      await onStill(s, await getSettings(), now);
     }
-    s.idle = idleState !== 'active' && !listening;
     await saveState(s);
     await evaluate();
-    if (chime) await playChime();
   }),
 );
 
@@ -890,6 +994,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'observe') runInference(false);
   if (alarm.name === 'dwell') locked(onDwell);
   if (alarm.name === 'timer') locked(onTimer);
+  if (alarm.name === 'idle-check') locked(onIdleCheck);
   if (alarm.name === 'sync') connectSync();
   if (alarm.name === 'badge') loadState().then(updateBadge);
 });
