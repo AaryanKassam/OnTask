@@ -29,7 +29,7 @@ Runs on your Mac and makes the other two smarter:
 
 No online services or APIs: the only model is the one running on your Mac.
 
-**Set up once:** `ollama pull qwen3-vl:4b`, then `cd companion && npm install && npm run setup`. After that, Chrome starts the companion (plus Ollama and the phone app server) on its own. Full steps: [docs/SETUP.md](docs/SETUP.md).
+**Set up once:** double-click **Set Up OnTask.command** in the OnTask folder. After that, Chrome starts the companion (plus Ollama and the phone app server) on its own. Full steps: [docs/SETUP.md](docs/SETUP.md).
 
 ## Phone app (iPhone and Android)
 
@@ -41,4 +41,4 @@ The computer is in charge, so the app is one screen:
 - Leaving the app mid-block sends a reminder, and your computer sees the pickup.
 - To truly lock your phone to OnTask, use **Guided Access** (iPhone) or **app pinning** (Android). The app walks you through it.
 
-**Pair it once:** install **Expo Go**, run `npm install` in `mobile/`, then in the OnTask panel in Chrome click **Pair a phone** and scan the QR code. Name your phone, and from then on they find each other on their own, even when your Mac's IP address changes.
+**Pair it once:** install **Expo Go**, then in Chrome open OnTask → **Paired devices** → **Manage** → **Pair a phone** and scan the QR code. Name your phone, and from then on they find each other on their own, even when your Mac's IP address changes. The Devices tab lets you switch each paired device on or off.

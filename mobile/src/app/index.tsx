@@ -38,13 +38,14 @@ async function openApp(app: (typeof BREAK_APPS)[number]) {
 export default function Home() {
   const data = store.useData();
   if (!data.loaded) return <Screen>{null}</Screen>;
-  const { settings, remote, joinedId, declinedId, lastEnded, notice } = data;
+  const { settings, remote, joinedId, declinedId, lastEnded, notice, active } = data;
   const session = remote.hub?.session ?? null;
   const computer = settings.computer;
 
   let body;
   if (!computer) body = <NotPaired notice={notice} />;
   else if (remote.status !== 'connected') body = <Looking name={computer.name} />;
+  else if (!active) body = <SwitchedOff phoneName={computer.phoneName} computerName={computer.name} />;
   else if (session && session.id === joinedId) body = <Following hub={remote.hub!} />;
   else if (session && session.id !== declinedId) body = <Offer task={session.task} />;
   else body = <Waiting />;
@@ -77,6 +78,17 @@ function NotPaired({ notice }: { notice: string | null }) {
       {notice ? <Body>{notice}</Body> : null}
       <Body>OnTask on your phone follows the session you start in Chrome. Pair once and they’ll find each other from then on.</Body>
       <Button title="Pair" onPress={() => router.push('/pair')} />
+    </Card>
+  );
+}
+
+function SwitchedOff({ phoneName, computerName }: { phoneName: string; computerName: string }) {
+  return (
+    <Card>
+      <Label>Switched off</Label>
+      <Body>
+        “{phoneName}” is paired with {computerName} but switched off, so it won’t follow sessions. Turn it on in Chrome: OnTask icon → Paired devices → Manage.
+      </Body>
     </Card>
   );
 }

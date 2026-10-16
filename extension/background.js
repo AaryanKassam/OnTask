@@ -714,7 +714,25 @@ const sameTitle = (a, b) => {
   return !!x && !!y && (x.includes(y) || y.includes(x));
 };
 
+// One Devices tab at a time: focus it if it's already open.
+async function openDevicesTab() {
+  const url = chrome.runtime.getURL('devices.html');
+  const [open] = await chrome.tabs.query({ url });
+  if (open) {
+    await chrome.tabs.update(open.id, { active: true });
+    await chrome.windows.update(open.windowId, { focused: true });
+  } else await chrome.tabs.create({ url });
+}
+
 async function onHubState(hub, isWelcome) {
+  // The first time the companion is up with no phone paired, offer pairing.
+  if (isWelcome && !(hub.devices.phones ?? []).length) {
+    const { pairOffered } = await chrome.storage.local.get('pairOffered');
+    if (!pairOffered) {
+      await chrome.storage.local.set({ pairOffered: true });
+      openDevicesTab();
+    }
+  }
   const s = await loadState();
   const remote = hub.session;
 
@@ -793,6 +811,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     'open-break-site': () => (BREAK_SITES[msg.site] ? chrome.tabs.create({ url: BREAK_SITES[msg.site] }) : null),
     'pair-companion': () => pair(msg.code, msg.port),
     'forget-phone': () => syncSend({ type: 'forget', phoneId: msg.phoneId }),
+    'set-phone-active': () => syncSend({ type: 'set-active', phoneId: msg.phoneId, active: !!msg.active }),
+    'rename-phone': () => syncSend({ type: 'rename', phoneId: msg.phoneId, name: msg.name }),
+    'open-devices': () => openDevicesTab(),
   };
   const handler = handlers[msg?.type];
   if (!handler) return false;

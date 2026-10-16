@@ -44,6 +44,14 @@ export interface SyncHandlers {
   onPaired(token: string, phone: { id: string; name: string }): void;
   onWelcome(computer: ComputerInfo, host: string): void;
   onForgotten(): void;
+  // This phone as the computer sees it: its name, and whether it's switched on.
+  onYou(you: You): void;
+}
+
+export interface You {
+  id: string | null;
+  name: string;
+  active: boolean;
 }
 
 const RETRY_MS = 5000;
@@ -103,6 +111,7 @@ export function connect() {
       token?: string;
       phone?: { id: string; name: string };
       computer?: ComputerInfo;
+      you?: You;
     };
     try {
       msg = JSON.parse(String(event.data));
@@ -116,9 +125,12 @@ export function connect() {
         welcomed = true;
         clearTimeout(giveUp);
         if (msg.computer) h.onWelcome(msg.computer, host);
+        if (msg.you) h.onYou(msg.you);
       }
       h.onStatus('connected', '');
       h.onState(msg.state, msg.type === 'welcome');
+    } else if (msg.type === 'you' && msg.you) {
+      h.onYou(msg.you);
     } else if (msg.type === 'session-ended' && msg.id) {
       h.onSessionEnded({ id: msg.id, by: msg.by ?? '' });
     } else if (msg.type === 'error') {

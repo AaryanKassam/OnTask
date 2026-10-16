@@ -20,7 +20,7 @@ const computer = { name: 'Aaryan’s MacBook Air', host: 'Aaryans-MacBook-Air.lo
 const hub = createHub({ port: PORT, host: '127.0.0.1', auth, computer });
 await hub.ready;
 
-const events = { statuses: [], paired: null, welcomes: [], forgotten: false };
+const events = { statuses: [], paired: null, welcomes: [], forgotten: false, you: [] };
 const handlers = {
   onStatus: (s) => events.statuses.push(s),
   onState: () => {},
@@ -31,6 +31,7 @@ const handlers = {
   },
   onWelcome: (c, host) => events.welcomes.push({ c, host }),
   onForgotten: () => (events.forgotten = true),
+  onYou: (you) => events.you.push(you),
 };
 
 test('pairs once with the code from the QR link and a name', async () => {
@@ -54,6 +55,14 @@ test('if the computer’s name doesn’t answer, it falls back to the last IP ad
   sync.configure({ hosts: ['ontask-test-missing.invalid', '127.0.0.1'], port: PORT, token: events.paired.token }, handlers);
   assert.ok(await until(() => events.welcomes.length === 3, 12000));
   assert.equal(events.welcomes[2].host, '127.0.0.1');
+});
+
+test('switching the phone off, renaming it and back on in Chrome reaches the phone', async () => {
+  const id = auth.phones()[0].id;
+  await hub.updatePhone(id, { active: false });
+  assert.ok(await until(() => events.you.at(-1)?.active === false));
+  await hub.updatePhone(id, { name: 'Work iPhone', active: true });
+  assert.ok(await until(() => events.you.at(-1)?.active === true && events.you.at(-1)?.name === 'Work iPhone'));
 });
 
 test('unpairing from the computer is reported to the phone', async () => {

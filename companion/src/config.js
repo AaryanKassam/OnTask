@@ -16,6 +16,7 @@ const run = promisify(execFile);
 
 const newCode = () => Array.from({ length: 6 }, () => ALPHABET[randomInt(ALPHABET.length)]).join('');
 const newToken = () => randomBytes(24).toString('base64url');
+const cleanName = (name) => String(name || 'Phone').trim().slice(0, 40) || 'Phone';
 
 export async function loadConfig({ freshCode = false, path = CONFIG } = {}) {
   let config = {};
@@ -42,13 +43,28 @@ export async function loadConfig({ freshCode = false, path = CONFIG } = {}) {
     },
     id: config.id,
     extensionToken: config.extensionToken,
-    phones: () => config.devices.map(({ id, name, pairedAt, lastSeen }) => ({ id, name, pairedAt, lastSeen })),
+    phones: () => config.devices.map(({ id, name, pairedAt, lastSeen, active }) => ({ id, name, pairedAt, lastSeen, active: active !== false })),
     findByToken: (token) => config.devices.find((d) => d.token === token) ?? null,
     async addPhone(name) {
-      const device = { id: randomUUID(), name: String(name || 'Phone').trim().slice(0, 40) || 'Phone', token: newToken(), pairedAt: Date.now(), lastSeen: Date.now() };
+      const device = { id: randomUUID(), name: cleanName(name), token: newToken(), pairedAt: Date.now(), lastSeen: Date.now(), active: true };
       config.devices.push(device);
       await save();
       return device;
+    },
+    // Active phones follow OnTask sessions; inactive ones stay paired but quiet.
+    async setActive(id, active) {
+      const d = config.devices.find((x) => x.id === id);
+      if (d) {
+        d.active = !!active;
+        await save();
+      }
+    },
+    async rename(id, name) {
+      const d = config.devices.find((x) => x.id === id);
+      if (d) {
+        d.name = cleanName(name);
+        await save();
+      }
     },
     async removePhone(id) {
       config.devices = config.devices.filter((d) => d.id !== id);

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OnTask devices</title>
+  <link rel="stylesheet" href="devices.css">
+</head>
+<body>
+  <main>
+    <header>
+      <span class="mark"></span>
+      <h1>OnTask devices</h1>
+    </header>
+
+    <section class="card" id="computer">
+      <h2>This computer</h2>
+      <p id="computer-status" class="muted">Checking…</p>
+      <div id="setup" hidden>
+        <p>OnTask needs its companion running on this Mac to watch the screen and link your phone. Set it up once:</p>
+        <ol>
+          <li>Open the <strong>OnTask</strong> folder in Finder and double-click <strong>Set Up OnTask.command</strong>. It installs everything and tells you when it’s done.</li>
+          <li>Come back here and reload this page.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card" id="devices-card">
+      <div class="card-head">
+        <h2>Paired devices</h2>
+        <button id="pair-toggle" class="primary" type="button">Pair a phone</button>
+      </div>
+      <p class="muted">Active devices follow your OnTask sessions: they get the timer, break alerts and the “Connect?” prompt. Switch one off to keep it paired but quiet.</p>
+      <ul id="devices" class="devices"></ul>
+      <p id="no-devices" class="empty" hidden>No phones paired yet.</p>
+    </section>
+
+    <section class="card" id="pair" hidden>
+      <h2>Pair a phone</h2>
+      <div class="pair">
+        <div id="qr" class="qr"></div>
+        <ol>
+          <li>Install <strong>Expo Go</strong> on your phone (App Store or Google Play).</li>
+          <li>On iPhone, point the <strong>Camera</strong> app at this code. On Android, scan it from <strong>Expo Go</strong>.</li>
+          <li>OnTask opens on your phone. Name it and tap <strong>Pair</strong>. It appears in the list above.</li>
+        </ol>
+      </div>
+      <p id="manual" class="muted small"></p>
+    </section>
+  </main>
+  <script src="devices.js" type="module"></script>
+</body>
+</html>

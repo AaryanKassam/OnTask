@@ -55,6 +55,7 @@ interface Data {
   lastEnded: { task: string; thoughts: Thought[]; pickups: number } | null;
   pairing: (PairingLink & { phoneName: string }) | null; // pairing in progress
   notice: string | null; // e.g. "unpaired on your computer"
+  active: boolean; // switched on in Chrome's Devices tab
 }
 
 const DEFAULT_SETTINGS: Settings = { computer: null, sound: true, vibration: true, keepAwake: true, lockTipSeen: false };
@@ -74,6 +75,7 @@ let data: Data = {
   lastEnded: null,
   pairing: null,
   notice: null,
+  active: true,
 };
 let appActive = AppState.currentState === 'active';
 let notifiedId: string | null = null;
@@ -194,6 +196,13 @@ const syncHandlers: sync.SyncHandlers = {
     const ip = computer.addresses[0] ?? c.ip;
     if (c.name === computer.name && c.host === computer.host && c.ip === ip && c.port === computer.port) return;
     commit({ settings: { ...data.settings, computer: { ...c, name: computer.name, host: computer.host || c.host, ip, port: computer.port } } });
+  },
+  onYou(you) {
+    const c = data.settings.computer;
+    const settings = c && c.phoneName !== you.name ? { ...data.settings, computer: { ...c, phoneName: you.name } } : data.settings;
+    // Switched off in Chrome: stop following any session.
+    commit({ settings, active: you.active, ...(you.active ? {} : { joinedId: null }) });
+    if (!you.active) alerts.cancel('phase', ...LEAVE_IDS);
   },
   onForgotten() {
     commit({ settings: { ...data.settings, computer: null }, joinedId: null, notice: 'This phone was unpaired on your computer. Pair it again to reconnect.' });

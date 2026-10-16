@@ -2,8 +2,6 @@
 // once a second while open; rebuilds the body only when the mode changes so
 // typing in a field isn't interrupted.
 
-import qrcode from './vendor/qrcode.mjs';
-
 const $ = (sel) => document.querySelector(sel);
 const send = (msg) => chrome.runtime.sendMessage(msg);
 
@@ -240,24 +238,6 @@ const WATCHER_TEXT = {
   error: 'screen watcher error',
 };
 
-// A QR code as SVG. Always dark on white, whatever the theme, so it scans.
-function qrSvg(text) {
-  const qr = qrcode(0, 'M');
-  qr.addData(text);
-  qr.make();
-  const n = qr.getModuleCount();
-  const margin = 3;
-  const size = n + margin * 2;
-  let path = '';
-  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (qr.isDark(y, x)) path += `M${x + margin} ${y + margin}h1v1h-1z`;
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
-  svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', 'QR code for pairing a phone');
-  svg.innerHTML = `<rect width="${size}" height="${size}" fill="#fff"/><path d="${path}" fill="#000"/>`;
-  return svg;
-}
-
 function ago(ms) {
   const m = Math.round(ms / 60_000);
   if (m < 1) return 'just now';
@@ -266,8 +246,7 @@ function ago(ms) {
   return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
 }
 
-let phonesKey = '';
-let pairOpen = false;
+let devicesKey = '';
 
 function updateCompanion(v) {
   const sync = v.sync ?? { status: 'off' };
@@ -285,35 +264,21 @@ function updateCompanion(v) {
   $('#companion-status').textContent = text;
   $('#companion-setup').hidden = !!hub || (sync.paired && sync.status !== 'not-installed' && sync.status !== 'error');
 
-  // Paired phones, rebuilt only when something about them changes.
+  // Paired devices, by name, rebuilt only when something about them changes.
   const phones = hub?.devices.phones ?? [];
-  const key = JSON.stringify(phones.map((p) => [p.id, p.name, p.connected, Math.round((v.now - p.lastSeen) / 60_000)]));
-  if (key !== phonesKey) {
-    phonesKey = key;
-    $('#phones').replaceChildren(
-      ...phones.map((p) => {
-        const forget = el('button', { className: 'link', textContent: 'Forget', title: `Unpair ${p.name}` });
-        forget.onclick = () => send({ type: 'forget-phone', phoneId: p.id });
-        return el('li', {}, [
-          el('span', {}, [el('span', { className: 'phone-name', textContent: p.name }), ` · ${p.connected ? 'connected' : `seen ${ago(v.now - p.lastSeen)}`}`]),
-          forget,
-        ]);
-      }),
-    );
-  }
-  const pairButton = $('#pair-phone');
-  pairButton.hidden = !hub;
-  pairButton.textContent = pairOpen ? 'Done' : phones.length ? 'Phone QR code (open or pair)' : 'Pair a phone';
-  if (!hub) pairOpen = false;
-  $('#pair-panel').hidden = !pairOpen;
-}
-
-function openPairPanel(v) {
-  const sync = v.sync;
-  const link = sync.pairUrl;
-  $('#pair-qr').replaceChildren(link ? qrSvg(link) : el('p', { className: 'muted small', textContent: 'Restart the companion to get a pairing link.' }));
-  const c = sync.computer;
-  $('#pair-manual').textContent = c ? `Can’t scan? In the app, tap Pair manually and enter ${c.host || c.addresses?.[0] || 'this Mac’s address'} and code ${sync.code ?? ''}.` : '';
+  const key = JSON.stringify([!!hub, phones.map((p) => [p.name, p.connected, p.active])]);
+  if (key === devicesKey) return;
+  devicesKey = key;
+  $('#device-list').replaceChildren(
+    ...phones.map((p) =>
+      el('li', {}, [
+        el('span', {}, [el('span', { className: `dot${p.connected ? ' live' : ''}` }), el('span', { className: 'device-name', textContent: p.name })]),
+        el('span', { className: 'muted small', textContent: !p.active ? 'Off' : p.connected ? 'Connected' : 'Not connected' }),
+      ]),
+    ),
+  );
+  $('#device-empty').textContent = !hub ? 'Set up the companion to pair your phone.' : phones.length ? '' : 'None yet. Click Manage to pair your phone.';
+  $('#manage-devices').textContent = hub && !phones.length ? 'Pair a phone' : 'Manage';
 }
 
 async function initSettings() {
@@ -337,10 +302,9 @@ async function initSettings() {
   $('#idle').onchange = (e) => send({ type: 'save-settings', settings: { idleMinutes: Number(e.target.value) } });
   $('#sound').onchange = (e) => send({ type: 'save-settings', settings: { sound: e.target.checked } });
   $('#test-sound').onclick = () => send({ type: 'test-sound' });
-  $('#pair-phone').onclick = () => {
-    pairOpen = !pairOpen;
-    if (pairOpen && view) openPairPanel(view);
-    refresh();
+  $('#manage-devices').onclick = async () => {
+    await send({ type: 'open-devices' });
+    window.close();
   };
   $('#companion-form').addEventListener('submit', async (e) => {
     e.preventDefault();

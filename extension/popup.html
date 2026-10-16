@@ -13,6 +13,15 @@
 
   <main id="main"></main>
 
+  <section class="devices-panel">
+    <div class="devices-head">
+      <span class="label">Paired devices</span>
+      <button id="manage-devices" class="link" type="button">Manage</button>
+    </div>
+    <ul id="device-list" class="list"></ul>
+    <p id="device-empty" class="muted small"></p>
+  </section>
+
   <section class="timer-panel">
     <label class="field">
       <span>Timer</span>
@@ -63,11 +72,7 @@
       <span>Companion (watches the screen, links your phone)</span>
       <p id="companion-status" class="muted small"></p>
       <div id="companion-setup" hidden>
-        <p class="small">One-time setup so Chrome can start it for you. In Terminal:</p>
-        <pre class="cmd">cd ~/Documents/OnTask/companion
-npm install
-npm run setup</pre>
-        <p class="muted small">Then reload OnTask in chrome://extensions.</p>
+        <p class="small">One-time setup: in Finder, open the <strong>OnTask</strong> folder and double-click <strong>Set Up OnTask.command</strong>. Then reload OnTask in chrome://extensions.</p>
         <form id="companion-form">
           <span class="muted small">Or link one you started in Terminal:</span>
           <div class="row">
@@ -75,13 +80,6 @@ npm run setup</pre>
             <button class="secondary">Link</button>
           </div>
         </form>
-      </div>
-      <ul id="phones" class="list"></ul>
-      <button id="pair-phone" class="secondary full" type="button" hidden>Pair a phone</button>
-      <div id="pair-panel" hidden>
-        <div id="pair-qr" class="qr"></div>
-        <p class="small">Scan with your phone’s Camera (iPhone) or the Expo Go app (Android). OnTask opens on your phone. The first time, it asks you to name the phone and pairs; after that, scanning just opens the app.</p>
-        <p id="pair-manual" class="muted small"></p>
       </div>
     </div>
     <p class="muted small">Everything runs on this machine. With the companion, screenshots are judged by a model on this Mac and deleted straight away. Nothing is sent to any online service.</p>

@@ -72,6 +72,22 @@ test('the extension signs in with its key and relays the session to the phone', 
   await settle();
   assert.equal(hub.state.phone.checks, 1);
 
+  // Switched off in Chrome: still paired and connected, but sees no session.
+  const phoneId = hub.state.devices.phones[0].id;
+  ext.send({ type: 'set-active', phoneId, active: false });
+  await settle();
+  assert.deepEqual(phone.inbox.find((m) => m.type === 'you')?.you, { id: phoneId, name: 'Aaryan’s iPhone', active: false });
+  assert.equal(phone.inbox.filter((m) => m.type === 'state').at(-1).state.session, null);
+  assert.equal(hub.state.devices.phones[0].active, false);
+  phone.send({ type: 'phone-check' });
+  await settle();
+  assert.equal(hub.state.phone.checks, 1, 'a switched-off phone can’t report pickups');
+  ext.send({ type: 'rename', phoneId, name: 'Old iPhone' });
+  ext.send({ type: 'set-active', phoneId, active: true });
+  await settle();
+  assert.equal(phone.inbox.filter((m) => m.type === 'state').at(-1).state.session.task, 'CS 246 notes', 'switched back on: sees the session again');
+  assert.equal(hub.state.devices.phones[0].name, 'Old iPhone');
+
   // Forgetting the phone from Chrome closes it and its key stops working.
   ext.send({ type: 'forget', phoneId: hub.state.devices.phones[0].id });
   await settle();

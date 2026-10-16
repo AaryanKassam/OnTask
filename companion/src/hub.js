@@ -19,15 +19,23 @@ export function memoryAuth(code) {
   return {
     code,
     extensionToken: `ext-${code}`,
-    phones: () => devices.map(({ id, name, pairedAt, lastSeen }) => ({ id, name, pairedAt, lastSeen })),
+    phones: () => devices.map(({ id, name, pairedAt, lastSeen, active }) => ({ id, name, pairedAt, lastSeen, active: active !== false })),
     findByToken: (token) => devices.find((d) => d.token === token) ?? null,
     async addPhone(name) {
-      const d = { id: `phone-${devices.length + 1}`, name: name || 'Phone', token: `tok-${devices.length + 1}-${Math.random().toString(36).slice(2)}`, pairedAt: Date.now(), lastSeen: Date.now() };
+      const d = { id: `phone-${devices.length + 1}`, name: name || 'Phone', token: `tok-${devices.length + 1}-${Math.random().toString(36).slice(2)}`, pairedAt: Date.now(), lastSeen: Date.now(), active: true };
       devices.push(d);
       return d;
     },
     async removePhone(id) {
       devices.splice(0, devices.length, ...devices.filter((d) => d.id !== id));
+    },
+    async setActive(id, active) {
+      const d = devices.find((x) => x.id === id);
+      if (d) d.active = !!active;
+    },
+    async rename(id, name) {
+      const d = devices.find((x) => x.id === id);
+      if (d) d.name = name;
     },
     async touch() {},
   };
@@ -35,7 +43,7 @@ export function memoryAuth(code) {
 
 export function createHub({ port, host = '0.0.0.0', code, auth = memoryAuth(code), computer = { name: 'This computer', host: '', addresses: [] }, log = () => {} }) {
   const wss = new WebSocketServer({ port, host, maxPayload: 64 * 1024 });
-  const clients = new Map(); // socket -> { device, phoneId, name }
+  const clients = new Map(); // socket -> { device, phoneId, name, active }
   const listeners = new Set();
   const requestHandlers = new Map(); // message type -> (device, msg, reply) => void
   const state = {
@@ -52,9 +60,30 @@ export function createHub({ port, host = '0.0.0.0', code, auth = memoryAuth(code
     for (const [ws, info] of clients) if (info.device) send(ws, msg);
   }
 
+  // A phone that's switched off in Chrome stays connected but sees no session.
+  const viewFor = (info) =>
+    info.device === 'phone' && !info.active ? { ...state, session: null, screen: null, phone: { away: false, since: null, checks: 0 } } : state;
+
   function changed() {
-    toAll({ type: 'state', state });
+    for (const [ws, info] of clients) if (info.device) send(ws, { type: 'state', state: viewFor(info) });
     for (const l of listeners) l(state);
+  }
+
+  const you = (info) => ({ id: info.phoneId ?? null, name: info.name, active: info.active !== false });
+
+  // Chrome turned a phone on or off, or renamed it: tell that phone.
+  async function updatePhone(id, patch) {
+    if ('active' in patch) await auth.setActive(id, patch.active);
+    if ('name' in patch) await auth.rename(id, patch.name);
+    const p = auth.phones().find((x) => x.id === id);
+    if (!p) return;
+    for (const [ws, info] of clients) {
+      if (info.phoneId !== id) continue;
+      Object.assign(info, { name: p.name, active: p.active });
+      send(ws, { type: 'you', you: you(info) });
+    }
+    refreshDevices();
+    changed();
   }
 
   function refreshDevices() {
@@ -95,12 +124,12 @@ export function createHub({ port, host = '0.0.0.0', code, auth = memoryAuth(code
       if (!phone) {
         return msg.token ? reject('This phone was removed from OnTask on your computer. Pair it again.', 'forgotten') : reject('Wrong pairing code');
       }
-      Object.assign(info, { device: 'phone', phoneId: phone.id, name: phone.name });
+      Object.assign(info, { device: 'phone', phoneId: phone.id, name: phone.name, active: phone.active !== false });
       auth.touch(phone.id);
     }
     refreshDevices();
     log(`${info.name} connected (${req.socket.remoteAddress})`);
-    send(ws, { type: 'welcome', state, computer: { ...computer, port }, you: { id: info.phoneId ?? null, name: info.name } });
+    send(ws, { type: 'welcome', state: viewFor(info), computer: { ...computer, port }, you: you(info) });
     changed();
   }
 
@@ -129,12 +158,19 @@ export function createHub({ port, host = '0.0.0.0', code, auth = memoryAuth(code
 
   function handle(info, msg, reply) {
     const { device } = info;
+    if (device === 'phone' && !info.active && msg.type !== 'forget') return; // switched off in Chrome
     const custom = requestHandlers.get(msg.type);
     if (custom) return custom(device, msg, reply);
     switch (msg.type) {
       case 'forget': // a phone unpairing itself, or Chrome removing one
         if (device === 'phone') forgetPhone(info.phoneId);
         else if (msg.phoneId) forgetPhone(String(msg.phoneId));
+        break;
+      case 'set-active':
+        if (device === 'extension' && msg.phoneId) updatePhone(String(msg.phoneId), { active: !!msg.active });
+        break;
+      case 'rename':
+        if (device === 'extension' && msg.phoneId && String(msg.name ?? '').trim()) updatePhone(String(msg.phoneId), { name: String(msg.name).trim().slice(0, 40) });
         break;
       case 'session-start': {
         const s = msg.session ?? {};
@@ -233,6 +269,7 @@ export function createHub({ port, host = '0.0.0.0', code, auth = memoryAuth(code
       return () => listeners.delete(fn);
     },
     forgetPhone,
+    updatePhone,
     // Requests that need the screen watcher, e.g. 'check-now' and 'infer'.
     onRequest(type, fn) {
       requestHandlers.set(type, fn);

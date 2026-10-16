@@ -11,7 +11,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -38,6 +38,32 @@ export function extensionId(manifestPath = join(repoDir, 'extension', 'manifest.
   const { key } = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const hex = createHash('sha256').update(Buffer.from(key, 'base64')).digest().subarray(0, 16).toString('hex');
   return [...hex].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
+}
+
+// Copies of OnTask a browser has already loaded from this folder. A copy
+// loaded before the extension had a fixed key keeps its old, path-based ID,
+// so allow that one too rather than make you remove and re-add it.
+export function installedIds(browserDir, extensionDir = join(repoDir, 'extension')) {
+  const ids = new Set();
+  let profiles = [];
+  try {
+    profiles = readdirSync(browserDir).filter((d) => d === 'Default' || d.startsWith('Profile '));
+  } catch {
+    return [];
+  }
+  for (const profile of profiles) {
+    for (const file of ['Secure Preferences', 'Preferences']) {
+      try {
+        const prefs = JSON.parse(readFileSync(join(browserDir, profile, file), 'utf8'));
+        for (const [id, info] of Object.entries(prefs.extensions?.settings ?? {})) {
+          if (info?.path && resolve(info.path) === resolve(extensionDir)) ids.add(id);
+        }
+      } catch {
+        // profile without that file
+      }
+    }
+  }
+  return [...ids];
 }
 
 function which(cmd) {
@@ -85,30 +111,35 @@ exec "${node}" "${join(companionDir, 'src', 'index.js')}" --native "$@" 2>>"$HOM
   chmodSync(launcherPath, 0o755);
 
   const id = extensionId();
-  const manifest = {
-    name: HOST_NAME,
-    description: 'OnTask companion: links your phone and watches your screen with a local model',
-    path: launcherPath,
-    type: 'stdio',
-    allowed_origins: [`chrome-extension://${id}/`],
-  };
   const installed = [];
+  const found = new Set();
   for (const b of BROWSERS) {
     if (!b.always && !existsSync(b.dir)) continue;
+    const loaded = installedIds(b.dir);
+    loaded.forEach((x) => found.add(x));
+    const manifest = {
+      name: HOST_NAME,
+      description: 'OnTask companion: links your phone and watches your screen with a local model',
+      path: launcherPath,
+      type: 'stdio',
+      allowed_origins: [...new Set([id, ...loaded])].map((x) => `chrome-extension://${x}/`),
+    };
     const dir = join(b.dir, 'NativeMessagingHosts');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${HOST_NAME}.json`), JSON.stringify(manifest, null, 2));
     installed.push(b.name);
   }
+  const step1 = found.size
+    ? `OnTask is already loaded in your browser, so just click the reload icon on it in chrome://extensions.`
+    : `In chrome://extensions, turn on Developer mode, click Load unpacked and pick\n     ${join(repoDir, 'extension')}`;
 
   console.log(`
 Done. ${installed.join(', ')} can now start the OnTask companion by itself.
 
 Next:
-  1. In chrome://extensions, remove OnTask and load the extension folder again
-     (${join(repoDir, 'extension')}). Its ID is now fixed: ${id}
+  1. ${step1}
   2. Click the OnTask icon. The companion starts, along with Ollama and the
-     phone app server, and the extension connects on its own.
+     phone app server, and a Devices tab opens so you can pair your phone.
   3. The first time it looks at your screen, macOS asks to let Google Chrome
      record the screen and control System Events. Allow both, then quit and
      reopen Chrome.
